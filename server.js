@@ -12,7 +12,7 @@ const app = express();
 
 // Define allowed origins based on environment
 const allowedOrigins = [
-  'https://ats-fe-1om7.onrender.com', // Production frontend URL
+  'https://frontend-09jj.onrender.com', // Production frontend URL
   'http://localhost:3000' // Local development frontend URL
 ];
 
