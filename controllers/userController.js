@@ -62,4 +62,4 @@ const getUserByEmail = async (req, res) => {
 };
 
 
-module.exports = { loginUser, signupUser, requestPasswordReset, resetPassword, getAllUsers, getUserByEmail };
+module.exports = { loginUser, signupUser, getAllUsers, getUserByEmail };
