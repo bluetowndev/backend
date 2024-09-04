@@ -269,5 +269,42 @@ const getAttendanceWithDistances = async (req, res) => {
   }
 };
 
+const getAttendanceSummary = async (req, res) => {
+  const { startDate, endDate, holidays } = req.query;
+  const userId = req.user._id;
 
-module.exports = { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getLocationName, getAttendanceWithDistances };
+  try {
+    // Parse the start and end dates
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    // Fetch attendance records for the month
+    const attendances = await Attendance.find({
+      user: userId,
+      timestamp: {
+        $gte: start,
+        $lt: end,
+      },
+    });
+
+    // Calculate presents and absents
+    const presentDays = new Set(attendances.map(a => a.date));
+    const workDays = end.getDate() - holidays.length;
+    const absentDays = workDays - presentDays.size;
+
+    res.status(200).json({
+      holidays: holidays.length,
+      present: presentDays.size,
+      absent: absentDays,
+      workDays,
+    });
+  } catch (error) {
+    console.error("Error fetching attendance summary:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
+
+
+
+module.exports = { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getLocationName, getAttendanceWithDistances, getAttendanceSummary };

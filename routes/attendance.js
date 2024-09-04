@@ -1,6 +1,6 @@
 const express = require('express');
 const requireAuth = require('../middleware/requireAuth');
-const { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getAttendanceWithDistances } = require('../controllers/attendaceController');
+const { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getAttendanceWithDistances, getAttendanceSummary } = require('../controllers/attendaceController');
 const multer = require('multer');
 
 const router = express.Router();
@@ -13,6 +13,7 @@ router.get('/', getAttendanceByDate);
 router.get('/all', getAllAttendance);
 router.get('/filtered', getFilteredAttendance);
 router.get('/user', getEmailAttendance);
+router.get('/summary', getAttendanceSummary);
 
 router.get('/with-distances', getAttendanceWithDistances);
 

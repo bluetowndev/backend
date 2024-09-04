@@ -37,37 +37,6 @@ const signupUser = async (req, res) => {
   }
 };
 
-// request password reset
-const requestPasswordReset = async (req, res) => {
-  const { email } = req.body;
-
-  try {
-    const user = await User.findOne({ email });
-    if (!user) {
-      throw Error('No user found with that email');
-    }
-
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    user.resetPasswordToken = crypto.createHash('sha256').update(resetToken).digest('hex');
-    user.resetPasswordExpires = Date.now() + 3600000; // 1 hour
-
-    await user.save();
-
-    const resetUrl = `${req.protocol}://${req.get('host')}/api/user/reset-password/${resetToken}`;
-    const message = `You are receiving this email because you (or someone else) have requested the reset of a password. \n\n ${resetUrl}`;
-
-    await sendEmail({
-      email: user.email,
-      subject: 'Password Reset Token',
-      message,
-    });
-
-    res.status(200).json({ message: 'Email sent' });
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-};
-
 const getAllUsers = async (req, res) => {
   try {
     const users = await User.find({});
@@ -77,33 +46,20 @@ const getAllUsers = async (req, res) => {
   }
 };
 
-// reset password
-const resetPassword = async (req, res) => {
-  const { token } = req.params;
-  const { password } = req.body;
+const getUserByEmail = async (req, res) => {
+  const { email } = req.query;
 
   try {
-    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
-    const user = await User.findOne({
-      resetPasswordToken: hashedToken,
-      resetPasswordExpires: { $gt: Date.now() }
-    });
-
+    const user = await User.findOne({ email }).select('-password');
     if (!user) {
-      throw Error('Token is invalid or has expired');
+      return res.status(404).json({ error: 'User not found' });
     }
 
-    const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(password, salt);
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpires = undefined;
-
-    await user.save();
-
-    res.status(200).json({ message: 'Password reset successful' });
+    res.status(200).json(user);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
 };
 
-module.exports = { loginUser, signupUser, requestPasswordReset, resetPassword, getAllUsers };
+
+module.exports = { loginUser, signupUser, requestPasswordReset, resetPassword, getAllUsers, getUserByEmail };
