@@ -1,10 +1,9 @@
 const Attendance = require('../models/attendanceModel');
-const { v4: uuidv4 } = require('uuid');
 const User = require('../models/userModel');
 const cloudinary = require('cloudinary').v2;
 const { Buffer } = require('buffer');
 const sharp = require('sharp');
-const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -165,7 +164,7 @@ const getFilteredAttendance = async (req, res) => {
 
   try {
     const usersInState = await User.find({ state }).distinct('_id');
-    
+
     // Parse the start and end dates
     const start = new Date(startDate);
     start.setUTCHours(0, 0, 0, 0);
@@ -254,7 +253,7 @@ const getAttendanceWithDistances = async (req, res) => {
     if (attendances.length > 1) {
       const locations = attendances.map(attendance => attendance.location);
       const distances = await calculateDistanceBetweenPoints(locations);
-      
+
       attendances.forEach((attendance, index) => {
         if (index > 0) {
           attendance._doc.distanceFromPrevious = distances[index - 1];
@@ -276,26 +275,59 @@ const getAttendanceSummary = async (req, res) => {
   try {
     // Parse the start and end dates
     const start = new Date(startDate);
+    start.setUTCHours(0, 0, 0, 0);  // Ensure full day coverage
     const end = new Date(endDate);
+    end.setUTCHours(23, 59, 59, 999);  // End of the day
 
-    // Fetch attendance records for the month
+    // Convert holiday dates into an array and filter future holidays
+    const holidayArray = holidays.split(',').map(date => new Date(date));
+    const holidaySet = new Set(holidayArray); // For faster lookups
+
+    const currentDate = new Date();
+
+    // Filter holidays that haven't occurred yet (future holidays)
+    const futureHolidays = holidayArray.filter(holiday => holiday > currentDate && holiday <= end);
+
+    // Fetch attendance records for the given user and date range
     const attendances = await Attendance.find({
       user: userId,
       timestamp: {
         $gte: start,
-        $lt: end,
+        $lte: end,
       },
     });
 
-    // Calculate presents and absents
+    // Extract attendance dates
     const presentDays = new Set(attendances.map(a => a.date));
-    const workDays = end.getDate() - holidays.length;
-    const absentDays = workDays - presentDays.size;
+
+    // Calculate total number of days between start and end date
+    const totalDays = Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1;
+
+    // Subtract total holidays from total days to get working days
+    const workDays = totalDays - holidaySet.size;
+
+    // Get the current year and month
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+
+    // Get the last day of the current month
+    const lastDayOfMonth = new Date(year, month + 1, 0); // Day 0 gives the last day of the previous month
+
+    // Calculate the difference in time (milliseconds)
+    const diffTime = lastDayOfMonth.getTime() - currentDate.getTime();
+
+    // Convert milliseconds to days (1 day = 24 * 60 * 60 * 1000 ms)
+    const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    // Calculate absent days (workDays - present days) + future holidays count, ensuring no negative values
+    let absentDays = workDays - presentDays.size - daysLeft + futureHolidays.length;
+    absentDays = Math.max(0, absentDays); // Ensure absent days are not negative
 
     res.status(200).json({
-      holidays: holidays.length,
+      holidays: holidaySet.size,
       present: presentDays.size,
       absent: absentDays,
+      futureHolidays: futureHolidays.length,  // To track future holidays
       workDays,
     });
   } catch (error) {
@@ -303,8 +335,5 @@ const getAttendanceSummary = async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 };
-
-
-
 
 module.exports = { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getLocationName, getAttendanceWithDistances, getAttendanceSummary };
