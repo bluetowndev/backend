@@ -16,7 +16,7 @@ const userSchema = new Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin'],
+    enum: ['user', 'admin', 'statehead'],
     default: 'user'
   },
   fullName: {
@@ -61,12 +61,19 @@ userSchema.statics.signup = async function(email, password, fullName, phoneNumbe
   const salt = await bcrypt.genSalt(10);
   const hash = await bcrypt.hash(password, salt);
 
-  const role = email === 'admin@bluetown.com' ? 'admin' : 'user';
+  // Role assignment logic
+  let role = 'user'; // default role
+  if (email === 'admin@bluetown.com') {
+    role = 'admin';
+  } else if (email === 'statehead@bluetown.com') {
+    role = 'statehead';
+  }
 
   const user = await this.create({ email, password: hash, role, fullName, phoneNumber, reportingManager, state });
 
   return user;
 }
+
 
 // static login method
 userSchema.statics.login = async function(email, password) {

@@ -1,7 +1,4 @@
-const crypto = require('crypto');
-const bcrypt = require('bcrypt');
 const User = require('../models/userModel');
-const sendEmail = require('../utils/sendEmail'); // Import the sendEmail utility
 const jwt = require("jsonwebtoken");
 
 const createToken = (_id) => {
@@ -61,5 +58,16 @@ const getUserByEmail = async (req, res) => {
   }
 };
 
+
+// const getUsersByState = async (req, res) => {
+//   const { state } = req.query;
+
+//   try {
+//     const users = await User.find({ state }).select('fullName');
+//     res.status(200).json(users);
+//   } catch (error) {
+//     res.status(400).json({ error: error.message });
+//   }
+// };
 
 module.exports = { loginUser, signupUser, getAllUsers, getUserByEmail };
