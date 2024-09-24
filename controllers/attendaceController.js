@@ -5,6 +5,7 @@ const { Buffer } = require('buffer');
 const sharp = require('sharp');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
+//Configuration of cloudinary for converting the images into an url
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -13,6 +14,7 @@ cloudinary.config({
 
 const GMAP_API_KEY = process.env.GMAP_API_KEY;
 
+//reducing the size of images to be less than 10kb
 const compressImageToTargetSize = async (buffer, maxSizeInKB) => {
   let quality = 100;
   let resizedBuffer = buffer;
@@ -33,7 +35,7 @@ const compressImageToTargetSize = async (buffer, maxSizeInKB) => {
   return resizedBuffer;
 };
 
-
+//Function to fetch location name from the latitude and longitude
 const getLocationName = async (lat, lng) => {
   try {
     const response = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&result_type=street_address&key=${GMAP_API_KEY}`);
@@ -54,9 +56,9 @@ const getLocationName = async (lat, lng) => {
   }
 };
 
+//core function to mark the attendance
 const markAttendance = async (req, res) => {
-  const { location, image, purpose, feedback } = req.body; // 'purpose' field added
-
+  const { location, image, purpose, feedback } = req.body;
   if (!image) {
     return res.status(400).json({ error: "Image is required" });
   }
@@ -163,7 +165,13 @@ const getFilteredAttendance = async (req, res) => {
   const { state, startDate, endDate } = req.query;
 
   try {
-    const usersInState = await User.find({ state }).distinct('_id');
+    let usersInState;
+
+    if (state === "all" || !state) {
+      usersInState = await User.find().distinct('_id'); // Get all users if 'all' is selected
+    } else {
+      usersInState = await User.find({ state }).distinct('_id'); // Get users from the specific state
+    }
 
     // Parse the start and end dates
     const start = new Date(startDate);
@@ -175,7 +183,7 @@ const getFilteredAttendance = async (req, res) => {
     const attendances = await Attendance.find({
       user: { $in: usersInState },
       timestamp: { $gte: start, $lt: end },
-    }).populate('user', 'email fullName phoneNumber reportingManager');
+    }).populate('user', 'email state fullName phoneNumber reportingManager');
 
     res.status(200).json(attendances);
   } catch (error) {
@@ -183,6 +191,7 @@ const getFilteredAttendance = async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 };
+
 
 const getEmailAttendance = async (req, res) => {
   const { email } = req.query;

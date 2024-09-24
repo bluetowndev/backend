@@ -58,16 +58,16 @@ const getUserByEmail = async (req, res) => {
   }
 };
 
+const getEngineersByState = async (req, res) => {
+  const { state } = req.query;
+  try {
+    const engineers = await User.find({ state, role: 'user' }, 'fullName email'); // Fetch engineers from DB
+    res.status(200).json(engineers);
+  } catch (error) {
+    console.error('Error fetching engineers:', error);
+    res.status(500).json({ error: 'Error fetching engineers' });
+  }
+};
 
-// const getUsersByState = async (req, res) => {
-//   const { state } = req.query;
 
-//   try {
-//     const users = await User.find({ state }).select('fullName');
-//     res.status(200).json(users);
-//   } catch (error) {
-//     res.status(400).json({ error: error.message });
-//   }
-// };
-
-module.exports = { loginUser, signupUser, getAllUsers, getUserByEmail };
+module.exports = { loginUser, signupUser, getAllUsers, getUserByEmail, getEngineersByState };
