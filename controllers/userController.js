@@ -61,13 +61,74 @@ const getUserByEmail = async (req, res) => {
 const getEngineersByState = async (req, res) => {
   const { state } = req.query;
   try {
-    const engineers = await User.find({ state, role: 'user' }, 'fullName email'); // Fetch engineers from DB
-    res.status(200).json(engineers);
+    const currentMonthStart = new Date();
+    currentMonthStart.setDate(1);
+    const currentMonthEnd = new Date();
+    currentMonthEnd.setMonth(currentMonthEnd.getMonth() + 1);
+    currentMonthEnd.setDate(0); // Last day of the month
+
+    const dates = []; // Array to hold all dates of the current month
+    for (let d = currentMonthStart; d <= currentMonthEnd; d.setDate(d.getDate() + 1)) {
+      dates.push(new Date(d).toISOString().split('T')[0]); // Format YYYY-MM-DD
+    }
+
+    const engineers = await User.aggregate([
+      { 
+        $match: { state, role: 'user' }
+      },
+      {
+        $lookup: {
+          from: 'attendances',
+          localField: '_id',
+          foreignField: 'user',
+          as: 'attendanceEntries'
+        }
+      },
+      {
+        $project: {
+          fullName: 1,
+          email: 1,
+          attendanceEntries: {
+            $ifNull: ['$attendanceEntries', []]
+          }
+        }
+      },
+      {
+        $unwind: {
+          path: '$attendanceEntries',
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $group: {
+          _id: { user: '$_id', date: '$attendanceEntries.date' },
+          fullName: { $first: '$fullName' },
+          email: { $first: '$email' },
+          attendanceCount: { $sum: { $cond: [{ $ifNull: ['$attendanceEntries', false] }, 1, 0] } }
+        }
+      },
+      {
+        $group: {
+          _id: '$_id.user',
+          fullName: { $first: '$fullName' },
+          email: { $first: '$email' },
+          attendanceByDate: {
+            $push: {
+              date: '$_id.date',
+              count: '$attendanceCount'
+            }
+          }
+        }
+      }
+    ]);
+
+    res.status(200).json({ engineers, dates }); // Return both engineers and dates
   } catch (error) {
     console.error('Error fetching engineers:', error);
     res.status(500).json({ error: 'Error fetching engineers' });
   }
 };
+
 
 
 module.exports = { loginUser, signupUser, getAllUsers, getUserByEmail, getEngineersByState };
