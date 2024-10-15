@@ -1,4 +1,5 @@
 const User = require('../models/userModel');
+const Attendance = require('../models/attendanceModel');
 const jwt = require("jsonwebtoken");
 
 const createToken = (_id) => {
@@ -129,6 +130,27 @@ const getEngineersByState = async (req, res) => {
   }
 };
 
+const getUsersWithoutAttendanceForToday = async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0]; // Format YYYY-MM-DD
 
+    // Find users who have marked attendance today
+    const usersWithAttendance = await Attendance.find({ date: today }).distinct('user');
 
-module.exports = { loginUser, signupUser, getAllUsers, getUserByEmail, getEngineersByState };
+    // Find users who have not marked attendance today, excluding "Delhi" and "Denmark" (case-insensitive)
+    const usersWithoutAttendance = await User.find({
+      _id: { $nin: usersWithAttendance }, // Exclude users who have marked attendance
+      role: 'user', // Only consider users with the 'user' role
+      state: { 
+        $nin: [/^delhi$/i, /^denmark$/i] // Case-insensitive exclusion for "Delhi" and "Denmark"
+      }
+    }).select('fullName email state'); // Select only name, email, and state
+
+    res.status(200).json(usersWithoutAttendance);
+  } catch (error) {
+    console.error('Error fetching users without attendance:', error);
+    res.status(500).json({ error: 'Error fetching users without attendance' });
+  }
+};
+
+module.exports = { loginUser, signupUser, getAllUsers, getUserByEmail, getEngineersByState, getUsersWithoutAttendanceForToday };

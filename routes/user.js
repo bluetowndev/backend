@@ -1,7 +1,7 @@
 const express = require('express');
 
 // controller functions
-const { loginUser, signupUser, getAllUsers, getUserByEmail, getEngineersByState } = require('../controllers/userController');
+const { loginUser, signupUser, getAllUsers, getUserByEmail, getEngineersByState, getUsersWithNoAttendanceToday, getUsersWithoutAttendanceForToday } = require('../controllers/userController');
 
 const router = express.Router();
 
@@ -16,6 +16,8 @@ router.get('/user-details', getUserByEmail);
 router.get('/all', getAllUsers);
 
 router.get('/engineers', getEngineersByState);
+
+router.get('/users-without-attendance', getUsersWithoutAttendanceForToday);
 
 
 module.exports = router;

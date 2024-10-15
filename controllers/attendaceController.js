@@ -216,10 +216,6 @@ const getEmailAttendance = async (req, res) => {
 };
 
 const calculateDistanceBetweenPoints = async (locations) => {
-  if (locations.length < 2) {
-    return []; // No distances if fewer than 2 points
-  }
-
   const origins = locations.slice(0, -1).map(loc => `${loc.lat},${loc.lng}`);
   const destinations = locations.slice(1).map(loc => `${loc.lat},${loc.lng}`);
 
@@ -237,24 +233,12 @@ const calculateDistanceBetweenPoints = async (locations) => {
       throw new Error(`Distance Matrix API error: ${data.status}`);
     }
 
-    const distances = data.rows.map((row, index) => {
-      const element = row.elements[0];
-      if (element.status === 'OK') {
-        return element.distance.text;
-      } else {
-        console.warn(`No valid distance for point ${index}: ${element.status}`);
-        return "0 m"; // Fallback for invalid response
-      }
-    });
-
-    return distances;
+    return data.rows.map(row => row.elements[0].distance.text);
   } catch (error) {
     console.error("Error calculating distances:", error);
     throw new Error("Error calculating distances");
   }
 };
-
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const getAttendanceWithDistances = async (req, res) => {
   const { date } = req.query;
@@ -262,6 +246,7 @@ const getAttendanceWithDistances = async (req, res) => {
 
   const startDate = new Date(date);
   startDate.setUTCHours(0, 0, 0, 0); // Start of the day in UTC
+
   const endDate = new Date(startDate);
   endDate.setUTCHours(23, 59, 59, 999); // End of the day in UTC
 
@@ -272,32 +257,17 @@ const getAttendanceWithDistances = async (req, res) => {
         $gte: startDate,
         $lt: endDate,
       },
-    }).sort({ timestamp: 1 }); // Ensure records are sorted by timestamp
+    });
 
     if (attendances.length > 1) {
       const locations = attendances.map(attendance => attendance.location);
-      let distances = [];
-
-      for (let i = 0; i < locations.length - 1; i++) {
-        try {
-          const partialDistances = await calculateDistanceBetweenPoints(locations.slice(i, i + 2));
-          distances.push(...partialDistances);
-          await delay(500); // Adding a slight delay (500 ms) between consecutive API calls
-        } catch (error) {
-          console.warn(`Error calculating distance for locations ${i}: using fallback`);
-          distances.push("0 m"); // Fallback distance
-        }
-      }
+      const distances = await calculateDistanceBetweenPoints(locations);
 
       attendances.forEach((attendance, index) => {
         if (index > 0) {
-          attendance._doc.distanceFromPrevious = distances[index - 1] || "0 m";
-        } else {
-          attendance._doc.distanceFromPrevious = "0 m"; // First entry has no previous location
+          attendance._doc.distanceFromPrevious = distances[index - 1];
         }
       });
-    } else if (attendances.length === 1) {
-      attendances[0]._doc.distanceFromPrevious = "0 m"; // Only one attendance
     }
 
     res.status(200).json(attendances);
@@ -306,8 +276,6 @@ const getAttendanceWithDistances = async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 };
-
-
 
 const getAttendanceSummary = async (req, res) => {
   const { startDate, endDate, holidays } = req.query;
