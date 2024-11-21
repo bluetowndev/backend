@@ -4,6 +4,7 @@ const cloudinary = require('cloudinary').v2;
 const { Buffer } = require('buffer');
 const sharp = require('sharp');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+const TotalDistance = require('../models/distanceModel');
 
 //Configuration of cloudinary for converting the images into an url
 cloudinary.config({
@@ -216,8 +217,8 @@ const getEmailAttendance = async (req, res) => {
 };
 
 const calculateDistanceBetweenPoints = async (locations) => {
-  const origins = locations.slice(0, -1).map(loc => `${loc.lat},${loc.lng}`);
-  const destinations = locations.slice(1).map(loc => `${loc.lat},${loc.lng}`);
+  const origins = locations.slice(0, -1).map((loc) => `${loc.lat},${loc.lng}`);
+  const destinations = locations.slice(1).map((loc) => `${loc.lat},${loc.lng}`);
 
   const params = new URLSearchParams({
     origins: origins.join('|'),
@@ -229,11 +230,27 @@ const calculateDistanceBetweenPoints = async (locations) => {
     const response = await fetch(`https://maps.googleapis.com/maps/api/distancematrix/json?${params}`);
     const data = await response.json();
 
-    if (data.status !== 'OK') {
+    // console.log("API Response Data:", JSON.stringify(data, null, 2)); // Debugging API response
+
+    if (data.status !== 'OK' || !data.rows) {
       throw new Error(`Distance Matrix API error: ${data.status}`);
     }
 
-    return data.rows.map(row => row.elements[0].distance.text);
+    // Parse and log valid distances
+    const distances = data.rows.map((row, index) => {
+      const element = row.elements[index]; // Use matching index pairing
+      if (element && element.status === 'OK' && element.distance) {
+        // console.log(
+        //   `From: ${origins[index]} To: ${destinations[index]} - Distance: ${element.distance.text}`
+        // );
+        return element.distance.text;
+      } else {
+        console.warn(`Invalid distance data for index ${index}`);
+        return "0 m";
+      }
+    });
+
+    return distances;
   } catch (error) {
     console.error("Error calculating distances:", error);
     throw new Error("Error calculating distances");
@@ -261,11 +278,12 @@ const getAttendanceWithDistances = async (req, res) => {
 
     if (attendances.length > 1) {
       const locations = attendances.map(attendance => attendance.location);
+
       const distances = await calculateDistanceBetweenPoints(locations);
 
       attendances.forEach((attendance, index) => {
         if (index > 0) {
-          attendance._doc.distanceFromPrevious = distances[index - 1];
+          attendance._doc.distanceFromPrevious = distances[index - 1] || "0 m";
         }
       });
     }
@@ -276,6 +294,7 @@ const getAttendanceWithDistances = async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 };
+
 
 const getAttendanceSummary = async (req, res) => {
   const { startDate, endDate, holidays } = req.query;
@@ -345,4 +364,52 @@ const getAttendanceSummary = async (req, res) => {
   }
 };
 
-module.exports = { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getLocationName, getAttendanceWithDistances, getAttendanceSummary };
+const saveTotalDistance = async (req, res) => {
+  const userId = req.user._id; // Assuming user ID is stored in `req.user` via authentication middleware
+  const { date, totalDistance } = req.body;
+
+  // if (!totalDistance) {
+  //   return res.status(400).json({ message: "Total distance is required." });
+  // }
+
+  // Safely handle `totalDistance` as a number or string
+  let numericDistance;
+  try {
+    if (typeof totalDistance === "string") {
+      let distance = totalDistance.trim();
+      if (distance.includes("km")) {
+        const [km, m] = distance.split(" km ");
+        numericDistance = (parseFloat(km) || 0) + (parseFloat(m) || 0) / 1000; // Convert to km
+      } else if (distance.includes("m")) {
+        numericDistance = parseFloat(distance) / 1000; // Convert meters to kilometers
+      } else {
+        numericDistance = parseFloat(distance) / 1000; // Default conversion to km
+      }
+    } else if (typeof totalDistance === "number") {
+      numericDistance = totalDistance; // Already a number
+    } else {
+      throw new Error("Invalid totalDistance type");
+    }
+  } catch (err) {
+    return res.status(400).json({ message: "Failed to parse totalDistance." });
+  }
+
+  if (isNaN(numericDistance)) {
+    return res.status(400).json({ message: "Invalid total distance value." });
+  }
+
+  try {
+    // Save or update the total distance
+    const totalDistanceRecord = await TotalDistance.findOneAndUpdate(
+      { userId, date },
+      { totalDistance: numericDistance }, // Store the distance in kilometers
+      { upsert: true, new: true }
+    );
+
+    res.status(200).json(totalDistanceRecord);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+module.exports = { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getLocationName, getAttendanceWithDistances, getAttendanceSummary, saveTotalDistance };
