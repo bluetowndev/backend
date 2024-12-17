@@ -11,9 +11,16 @@ const totalDistanceSchema = new mongoose.Schema({
     required: true,
   },
   totalDistance: {
-    type: Number, // Store distance in meters
+    type: Number, // Store total distance in kilometers
     required: true,
   },
+  pointToPointDistances: [
+    {
+      from: String, // Optional: From location or timestamp
+      to: String,   // Optional: To location or timestamp
+      distance: Number, // Distance in meters or km
+    },
+  ],
 });
 
 module.exports = mongoose.model('TotalDistance', totalDistanceSchema);

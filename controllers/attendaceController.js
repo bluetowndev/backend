@@ -366,11 +366,9 @@ const getAttendanceSummary = async (req, res) => {
 
 const saveTotalDistance = async (req, res) => {
   const userId = req.user._id; // Assuming user ID is stored in `req.user` via authentication middleware
-  const { date, totalDistance } = req.body;
+  const { date, totalDistance, pointToPointDistances } = req.body;
 
-  // if (!totalDistance) {
-  //   return res.status(400).json({ message: "Total distance is required." });
-  // }
+  // console.log("Received payload:", req.body);
 
   // Safely handle `totalDistance` as a number or string
   let numericDistance;
@@ -398,18 +396,28 @@ const saveTotalDistance = async (req, res) => {
     return res.status(400).json({ message: "Invalid total distance value." });
   }
 
+  // Validate pointToPointDistances
+  if (!Array.isArray(pointToPointDistances) || pointToPointDistances.length === 0) {
+    return res.status(400).json({ message: "Point-to-point distances are required." });
+  }
+
   try {
-    // Save or update the total distance
+    // Save or update the total distance along with point-to-point distances
     const totalDistanceRecord = await TotalDistance.findOneAndUpdate(
       { userId, date },
-      { totalDistance: numericDistance }, // Store the distance in kilometers
+      {
+        totalDistance: numericDistance, // Store the distance in kilometers
+        pointToPointDistances, // Store the point-to-point distances
+      },
       { upsert: true, new: true }
     );
 
     res.status(200).json(totalDistanceRecord);
   } catch (error) {
+    console.error("Error saving total distance:", error);
     res.status(500).json({ message: error.message });
   }
 };
+
 
 module.exports = { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getLocationName, getAttendanceWithDistances, getAttendanceSummary, saveTotalDistance };
