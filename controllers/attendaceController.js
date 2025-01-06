@@ -393,13 +393,31 @@ const saveTotalDistance = async (req, res) => {
     return res.status(400).json({ message: "Invalid total distance value." });
   }
 
+  // Validate and enrich pointToPointDistances
+  const enrichedPointToPointDistances = [];
+  if (Array.isArray(pointToPointDistances)) {
+    pointToPointDistances.forEach((point) => {
+      const { from, to, distance, transitTime } = point;
+      if (!from || !to || typeof distance !== "number") {
+        return; // Skip invalid entries
+      }
+
+      enrichedPointToPointDistances.push({
+        from,
+        to,
+        distance,
+        transitTime: transitTime || null, // Default to null if transitTime is not provided
+      });
+    });
+  }
+
   try {
     const updateData = {
-      totalDistance: numericDistance, // Store the distance in kilometers
+      totalDistance: numericDistance, // Store the total distance in kilometers
     };
 
-    if (Array.isArray(pointToPointDistances) && pointToPointDistances.length > 0) {
-      updateData.pointToPointDistances = pointToPointDistances;
+    if (enrichedPointToPointDistances.length > 0) {
+      updateData.pointToPointDistances = enrichedPointToPointDistances;
     }
 
     const totalDistanceRecord = await TotalDistance.findOneAndUpdate(
@@ -409,9 +427,9 @@ const saveTotalDistance = async (req, res) => {
     );
 
     const message =
-      updateData.pointToPointDistances
-        ? "Total and point-to-point distances saved successfully."
-        : "Total distance saved successfully without point-to-point distances.";
+      enrichedPointToPointDistances.length > 0
+        ? "Total distance and point-to-point distances with locations and transit time saved successfully."
+        : "Total distance saved successfully without point-to-point details.";
 
     res.status(200).json({ message, totalDistanceRecord });
   } catch (error) {
@@ -419,6 +437,7 @@ const saveTotalDistance = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
 
 
 module.exports = { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getLocationName, getAttendanceWithDistances, getAttendanceSummary, saveTotalDistance };

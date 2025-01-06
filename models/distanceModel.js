@@ -16,9 +16,22 @@ const totalDistanceSchema = new mongoose.Schema({
   },
   pointToPointDistances: [
     {
-      from: String, // Optional: From location or timestamp
-      to: String,   // Optional: To location or timestamp
-      distance: Number, // Distance in meters or km
+      from: {
+        type: String, // Start location name
+        required: true,
+      },
+      to: {
+        type: String, // End location name
+        required: true,
+      },
+      distance: {
+        type: Number, // Distance in kilometers
+        required: true,
+      },
+      transitTime: {
+        type: String, // Transit time (e.g., "30 mins")
+        required: true,
+      },
     },
   ],
 });
