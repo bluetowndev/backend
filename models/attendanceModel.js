@@ -23,9 +23,10 @@ const attendanceSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  subPurpose: { type: String },
   feedback: { // New field for feedback
     type: String,
-    maxlength: 50, 
+    maxlength: 50,
   },
   timestamp: {
     type: Date,

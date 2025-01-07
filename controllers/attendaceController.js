@@ -58,39 +58,89 @@ const getLocationName = async (lat, lng) => {
 };
 
 //core function to mark the attendance
+// const markAttendance = async (req, res) => {
+//   const { location, image, purpose, feedback } = req.body;
+//   if (!image) {
+//     return res.status(400).json({ error: "Image is required" });
+//   }
+
+//   if (!location) {
+//     return res.status(400).json({ error: "Location is required" });
+//   }
+
+//   if (!purpose) {
+//     return res.status(400).json({ error: "Purpose of visit is required" });
+//   }
+
+//   // Convert base64 string to buffer
+//   const matches = image.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
+//   if (!matches || matches.length !== 3) {
+//     return res.status(400).json({ error: "Invalid image format" });
+//   }
+//   const type = matches[1];
+//   const buffer = Buffer.from(matches[2], 'base64');
+
+//   // Resize and reduce the quality of the image using sharp
+//   try {
+//     const maxSizeInKB = 10; // Max size in KB
+//     const resizedBuffer = await compressImageToTargetSize(buffer, maxSizeInKB);
+
+//     // Upload resized image to Cloudinary
+//     cloudinary.uploader.upload_stream({ resource_type: 'image' }, async (error, result) => {
+//       if (error) {
+//         console.error("Cloudinary upload error:", error);
+//         return res.status(500).json({ error: "Cloudinary upload failed" });
+//       }
+
+//       try {
+//         const imageUrl = result.secure_url;
+//         const timestamp = new Date();
+//         const parsedLocation = JSON.parse(location);
+//         const locationName = await getLocationName(parsedLocation.lat, parsedLocation.lng);
+
+//         const attendance = new Attendance({
+//           image: imageUrl,
+//           location: parsedLocation,
+//           locationName,
+//           purpose, // Save the purpose of visit
+//           feedback,
+//           date: new Date().toISOString().split('T')[0], // Save only the date part
+//           timestamp,
+//           user: req.user._id,
+//         });
+
+//         await attendance.save();
+//         res.status(201).json({ message: "Attendance saved successfully" });
+//       } catch (error) {
+//         console.error("Error saving attendance:", error);
+//         res.status(500).json({ error: "Server error" });
+//       }
+//     }).end(resizedBuffer);
+//   } catch (error) {
+//     console.error("Error processing image:", error);
+//     res.status(500).json({ error: "Error processing image" });
+//   }
+// };
+
 const markAttendance = async (req, res) => {
-  const { location, image, purpose, feedback } = req.body;
-  if (!image) {
-    return res.status(400).json({ error: "Image is required" });
-  }
+  // console.log("Request Body:", req.body);
+  const { location, image, purpose, feedback, subPurpose } = req.body;
+  if (!image) return res.status(400).json({ error: "Image is required" });
+  if (!location) return res.status(400).json({ error: "Location is required" });
+  if (!purpose) return res.status(400).json({ error: "Purpose of visit is required" });
 
-  if (!location) {
-    return res.status(400).json({ error: "Location is required" });
-  }
-
-  if (!purpose) {
-    return res.status(400).json({ error: "Purpose of visit is required" });
-  }
-
-  // Convert base64 string to buffer
   const matches = image.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
   if (!matches || matches.length !== 3) {
     return res.status(400).json({ error: "Invalid image format" });
   }
-  const type = matches[1];
-  const buffer = Buffer.from(matches[2], 'base64');
+  const buffer = Buffer.from(matches[2], "base64");
 
-  // Resize and reduce the quality of the image using sharp
   try {
-    const maxSizeInKB = 10; // Max size in KB
+    const maxSizeInKB = 10;
     const resizedBuffer = await compressImageToTargetSize(buffer, maxSizeInKB);
 
-    // Upload resized image to Cloudinary
-    cloudinary.uploader.upload_stream({ resource_type: 'image' }, async (error, result) => {
-      if (error) {
-        console.error("Cloudinary upload error:", error);
-        return res.status(500).json({ error: "Cloudinary upload failed" });
-      }
+    cloudinary.uploader.upload_stream({ resource_type: "image" }, async (error, result) => {
+      if (error) return res.status(500).json({ error: "Cloudinary upload failed" });
 
       try {
         const imageUrl = result.secure_url;
@@ -102,9 +152,10 @@ const markAttendance = async (req, res) => {
           image: imageUrl,
           location: parsedLocation,
           locationName,
-          purpose, // Save the purpose of visit
+          purpose,
+          subPurpose,
           feedback,
-          date: new Date().toISOString().split('T')[0], // Save only the date part
+          date: new Date().toISOString().split("T")[0],
           timestamp,
           user: req.user._id,
         });
@@ -112,12 +163,10 @@ const markAttendance = async (req, res) => {
         await attendance.save();
         res.status(201).json({ message: "Attendance saved successfully" });
       } catch (error) {
-        console.error("Error saving attendance:", error);
         res.status(500).json({ error: "Server error" });
       }
     }).end(resizedBuffer);
   } catch (error) {
-    console.error("Error processing image:", error);
     res.status(500).json({ error: "Error processing image" });
   }
 };
