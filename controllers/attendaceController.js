@@ -57,71 +57,6 @@ const getLocationName = async (lat, lng) => {
   }
 };
 
-//core function to mark the attendance
-// const markAttendance = async (req, res) => {
-//   const { location, image, purpose, feedback } = req.body;
-//   if (!image) {
-//     return res.status(400).json({ error: "Image is required" });
-//   }
-
-//   if (!location) {
-//     return res.status(400).json({ error: "Location is required" });
-//   }
-
-//   if (!purpose) {
-//     return res.status(400).json({ error: "Purpose of visit is required" });
-//   }
-
-//   // Convert base64 string to buffer
-//   const matches = image.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
-//   if (!matches || matches.length !== 3) {
-//     return res.status(400).json({ error: "Invalid image format" });
-//   }
-//   const type = matches[1];
-//   const buffer = Buffer.from(matches[2], 'base64');
-
-//   // Resize and reduce the quality of the image using sharp
-//   try {
-//     const maxSizeInKB = 10; // Max size in KB
-//     const resizedBuffer = await compressImageToTargetSize(buffer, maxSizeInKB);
-
-//     // Upload resized image to Cloudinary
-//     cloudinary.uploader.upload_stream({ resource_type: 'image' }, async (error, result) => {
-//       if (error) {
-//         console.error("Cloudinary upload error:", error);
-//         return res.status(500).json({ error: "Cloudinary upload failed" });
-//       }
-
-//       try {
-//         const imageUrl = result.secure_url;
-//         const timestamp = new Date();
-//         const parsedLocation = JSON.parse(location);
-//         const locationName = await getLocationName(parsedLocation.lat, parsedLocation.lng);
-
-//         const attendance = new Attendance({
-//           image: imageUrl,
-//           location: parsedLocation,
-//           locationName,
-//           purpose, // Save the purpose of visit
-//           feedback,
-//           date: new Date().toISOString().split('T')[0], // Save only the date part
-//           timestamp,
-//           user: req.user._id,
-//         });
-
-//         await attendance.save();
-//         res.status(201).json({ message: "Attendance saved successfully" });
-//       } catch (error) {
-//         console.error("Error saving attendance:", error);
-//         res.status(500).json({ error: "Server error" });
-//       }
-//     }).end(resizedBuffer);
-//   } catch (error) {
-//     console.error("Error processing image:", error);
-//     res.status(500).json({ error: "Error processing image" });
-//   }
-// };
-
 const markAttendance = async (req, res) => {
   // console.log("Request Body:", req.body);
   const { location, image, purpose, feedback, subPurpose } = req.body;
@@ -487,6 +422,302 @@ const saveTotalDistance = async (req, res) => {
   }
 };
 
+const getUsersWithoutCheckIn = async (req, res) => {
+  try {
+    // Get the current date in 'YYYY-MM-DD' format
+    const currentDate = new Date().toISOString().split('T')[0];
+
+    // Step 1: Use aggregation to find users who have made "Check In" entries for the current date
+    const usersWithCheckIn = await Attendance.aggregate([
+      {
+        $match: { purpose: 'Check In', date: currentDate }, // Find all "Check In" entries for today
+      },
+      {
+        $group: { _id: '$user' }, // Group by user ID to get unique users who checked in
+      },
+    ]);
+
+    // Step 2: Use aggregation to find users who have made "On Leave" entries for the current date
+    const usersOnLeave = await Attendance.aggregate([
+      {
+        $match: { purpose: 'On Leave', date: currentDate }, // Find all "On Leave" entries for today
+      },
+      {
+        $group: { _id: '$user' }, // Group by user ID to get unique users who are on leave
+      },
+    ]);
+
+    // Step 3: Extract IDs of users who have checked in or are on leave
+    const userIdsWithCheckInOrOnLeave = [
+      ...new Set([
+        ...usersWithCheckIn.map((entry) => entry._id),
+        ...usersOnLeave.map((entry) => entry._id),
+      ]),
+    ];
+
+    // Step 4: Define exclusion criteria
+    const excludedEmails = [
+      'rit.parmar@bluetown.com',
+      'anuj.sonkar@bluetown.com',
+      'ajay.jha@bluetown.com',
+      'cb@bluetown.com',
+      'shiv.hundawal@bluetown.com',
+      'partha.ghosh@bluetown.com',
+      'punit.kumar@bluetown.com',
+      'sharat.jha@bluetown.com',
+      'pankaj.tiwari@bluetown.com',
+      'pushpraj.pachori@bluetown.com',
+      'test@test.com',
+    ];
+
+    // Step 5: Find attendance entries for users NOT in the above list and NOT from Delhi state
+    const attendanceEntries = await Attendance.find({
+      user: { $nin: userIdsWithCheckInOrOnLeave }, // Exclude users who checked in or are on leave
+      date: currentDate,
+    })
+      .populate('user')
+      .lean(); // Convert mongoose documents to plain JavaScript objects
+
+    // Step 6: Filter out users based on exclusion criteria
+    const usersNotCheckedIn = attendanceEntries
+      .filter(
+        (entry) =>
+          entry.user && // Ensure user is not null
+          !excludedEmails.includes(entry.user.email) && // Exclude specific emails
+          entry.user.state !== 'Delhi' // Exclude users from Delhi
+      )
+      .map((entry) => {
+        const { fullName, state, email, phoneNumber, reportingManager } = entry.user;
+        return { fullName, state, email, phoneNumber, reportingManager };
+      });
+
+    // Step 7: Remove duplicates (users may have multiple attendance entries)
+    const uniqueUsers = [];
+    const seenUserEmails = new Set();
+
+    for (const user of usersNotCheckedIn) {
+      if (!seenUserEmails.has(user.email)) {
+        uniqueUsers.push(user);
+        seenUserEmails.add(user.email);
+      }
+    }
+
+    // Respond with the list of unique users
+    res.status(200).json({ success: true, data: uniqueUsers });
+  } catch (error) {
+    console.error('Error fetching users not checked in today:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+};
 
 
-module.exports = { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getLocationName, getAttendanceWithDistances, getAttendanceSummary, saveTotalDistance };
+const getUsersWithoutCheckOut = async (req, res) => {
+  try {
+    // Get the current date in 'YYYY-MM-DD' format
+    const currentDate = new Date().toISOString().split('T')[0];
+
+    // Step 1: Use aggregation to find users who have made "Check Out" entries for the current date
+    const usersWithCheckOut = await Attendance.aggregate([
+      {
+        $match: { purpose: 'Check Out', date: currentDate }, // Find all "Check Out" entries for today
+      },
+      {
+        $group: { _id: '$user' }, // Group by user ID to get unique users who checked out
+      },
+    ]);
+
+    // Step 2: Use aggregation to find users who have made "On Leave" entries for the current date
+    const usersOnLeave = await Attendance.aggregate([
+      {
+        $match: { purpose: 'On Leave', date: currentDate }, // Find all "On Leave" entries for today
+      },
+      {
+        $group: { _id: '$user' }, // Group by user ID to get unique users who are on leave
+      },
+    ]);
+
+    // Step 3: Extract IDs of users who have checked out or are on leave
+    const userIdsWithCheckOutOrOnLeave = [
+      ...new Set([
+        ...usersWithCheckOut.map((entry) => entry._id),
+        ...usersOnLeave.map((entry) => entry._id),
+      ]),
+    ];
+
+    // Step 4: Define exclusion criteria
+    const excludedEmails = [
+      'rit.parmar@bluetown.com',
+      'anuj.sonkar@bluetown.com',
+      'ajay.jha@bluetown.com',
+      'cb@bluetown.com',
+      'shiv.hundawal@bluetown.com',
+      'partha.ghosh@bluetown.com',
+      'punit.kumar@bluetown.com',
+      'sharat.jha@bluetown.com',
+      'pankaj.tiwari@bluetown.com',
+      'pushpraj.pachori@bluetown.com',
+      'test@test.com',
+    ];
+
+    // Step 5: Find attendance entries for users NOT in the above list and NOT from Delhi state
+    const attendanceEntries = await Attendance.find({
+      user: { $nin: userIdsWithCheckOutOrOnLeave }, // Exclude users who checked out or are on leave
+      date: currentDate,
+    })
+      .populate('user')
+      .lean(); // Convert mongoose documents to plain JavaScript objects
+
+    // Step 6: Filter out users based on exclusion criteria
+    const usersNotCheckedOut = attendanceEntries
+      .filter(
+        (entry) =>
+          entry.user && // Ensure user is not null
+          !excludedEmails.includes(entry.user.email) && // Exclude specific emails
+          entry.user.state !== 'Delhi' // Exclude users from Delhi
+      )
+      .map((entry) => {
+        const { fullName, state, email, phoneNumber, reportingManager } = entry.user;
+        return { fullName, state, email, phoneNumber, reportingManager };
+      });
+
+    // Step 7: Remove duplicates (users may have multiple attendance entries)
+    const uniqueUsers = [];
+    const seenUserEmails = new Set();
+
+    for (const user of usersNotCheckedOut) {
+      if (!seenUserEmails.has(user.email)) {
+        uniqueUsers.push(user);
+        seenUserEmails.add(user.email);
+      }
+    }
+
+    // Respond with the list of unique users
+    res.status(200).json({ success: true, data: uniqueUsers });
+  } catch (error) {
+    console.error('Error fetching users not checked out today:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+};
+
+
+const getUsersOnLeave = async (req, res) => {
+  try {
+    // Get the current date in 'YYYY-MM-DD' format
+    const currentDate = new Date().toISOString().split('T')[0];
+
+    // Step 1: Find attendance entries with "On Leave" purpose for the current date
+    const attendanceEntries = await Attendance.find({
+      purpose: 'On Leave',
+      date: currentDate,
+    }).populate('user');
+
+    // Step 2: Extract user details, skipping null users
+    const usersOnLeave = attendanceEntries
+      .filter((entry) => entry.user) // Ensure user is not null
+      .map((entry) => {
+        const { fullName, state, email, phoneNumber, reportingManager } = entry.user;
+        return { fullName, state, email, phoneNumber, reportingManager };
+      });
+
+    // Step 3: Remove duplicates (users may have multiple attendance entries)
+    const uniqueUsers = [];
+    const seenUserEmails = new Set();
+
+    for (const user of usersOnLeave) {
+      if (!seenUserEmails.has(user.email)) {
+        uniqueUsers.push(user);
+        seenUserEmails.add(user.email);
+      }
+    }
+
+    // Respond with the list of unique users
+    res.status(200).json({ success: true, data: uniqueUsers });
+  } catch (error) {
+    console.error('Error fetching users on leave:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+};
+
+const getUserVisitCounts = async (req, res) => {
+  try {
+    // Get the current date in 'YYYY-MM-DD' format
+    const currentDate = new Date().toISOString().split('T')[0];
+
+    // Step 1: Define excluded purposes
+    const excludedPurposes = ['Check In', 'Check Out', 'On Leave'];
+
+    // Step 2: Aggregate attendance data for the current date and non-excluded purposes
+    const visitCounts = await Attendance.aggregate([
+      {
+        $match: {
+          date: currentDate, // Filter by current date
+          purpose: { $nin: excludedPurposes }, // Exclude specific purposes
+        },
+      },
+      {
+        $group: {
+          _id: '$user', // Group by user ID
+          visitCount: { $sum: 1 }, // Count occurrences
+        },
+      },
+      {
+        $lookup: {
+          from: 'users', // Reference the Users collection
+          localField: '_id',
+          foreignField: '_id',
+          as: 'userDetails',
+        },
+      },
+      {
+        $unwind: '$userDetails', // Unwind the user details array
+      },
+      {
+        $project: {
+          _id: 0,
+          fullName: '$userDetails.fullName',
+          email: '$userDetails.email',
+          phoneNumber: '$userDetails.phoneNumber',
+          state: '$userDetails.state',
+          reportingManager: '$userDetails.reportingManager',
+          visitCount: 1, // Include visit count
+        },
+      },
+    ]);
+
+    // Respond with the visit counts
+    res.status(200).json({ success: true, data: visitCounts });
+  } catch (error) {
+    console.error('Error fetching user visit counts for today:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  }
+};
+
+const getUsersWithoutAttendance = async (req, res) => {
+  try {
+    const todayDate = new Date().toISOString().split('T')[0]; // Get current date in YYYY-MM-DD format
+
+    // Fetch users who marked attendance for the current day
+    const usersWithAttendance = await Attendance.find({ date: todayDate }).distinct('user');
+
+    // Fetch users who have not marked attendance, exclude Delhi and Denmark states, and ensure role is 'user'
+    const usersWithoutAttendance = await User.find({
+      _id: { $nin: usersWithAttendance }, // Exclude users with attendance
+      state: { $nin: ['Delhi', 'Denmark'] }, // Exclude Delhi and Denmark states
+      role: 'user', // Ensure role is 'user'
+    }).select('fullName email state phoneNumber reportingManager'); // Select required fields
+
+    res.status(200).json({
+      success: true,
+      data: usersWithoutAttendance,
+    });
+  } catch (error) {
+    console.error('Error fetching users without attendance:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch users without attendance.',
+    });
+  }
+};
+
+
+module.exports = { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getLocationName, getAttendanceWithDistances, getAttendanceSummary, saveTotalDistance, getUsersWithoutCheckIn, getUsersWithoutCheckOut, getUsersOnLeave, getUserVisitCounts, getUsersWithoutAttendance };
