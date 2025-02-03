@@ -719,5 +719,24 @@ const getUsersWithoutAttendance = async (req, res) => {
   }
 };
 
+const isFirstEntryToday = async (req, res) => {
+  try {
+    const userId = req.user._id; // Assuming you are using authentication middleware
+    const todayDate = new Date().toISOString().split('T')[0]; // Get today's date in YYYY-MM-DD format
 
-module.exports = { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getLocationName, getAttendanceWithDistances, getAttendanceSummary, saveTotalDistance, getUsersWithoutCheckIn, getUsersWithoutCheckOut, getUsersOnLeave, getUserVisitCounts, getUsersWithoutAttendance };
+    // Check if there's an attendance record for the user on today's date
+    const attendance = await Attendance.findOne({ user: userId, date: todayDate });
+
+    if (attendance) {
+      return res.status(200).json({ isFirstEntry: false }); // User has already marked attendance today
+    } else {
+      return res.status(200).json({ isFirstEntry: true }); // No attendance record found for today
+    }
+  } catch (error) {
+    console.error('Error checking first entry:', error);
+    res.status(500).json({ error: 'Failed to check entry status' });
+  }
+};
+
+
+module.exports = { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getLocationName, getAttendanceWithDistances, getAttendanceSummary, saveTotalDistance, getUsersWithoutCheckIn, getUsersWithoutCheckOut, getUsersOnLeave, getUserVisitCounts, getUsersWithoutAttendance, isFirstEntryToday };

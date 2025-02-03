@@ -1,7 +1,7 @@
 const express = require('express');
 
 // controller functions
-const { loginUser, signupUser, getAllUsers, getUserByEmail, getEngineersByState, getUsersWithNoAttendanceToday, getUsersWithoutAttendanceForToday } = require('../controllers/userController');
+const { loginUser, signupUser, getAllUsers, getUserByEmail, getEngineersByState, getUsersWithNoAttendanceToday, getUsersWithoutAttendanceForToday, deleteUserByEmail, updateUserByEmail } = require('../controllers/userController');
 
 const router = express.Router();
 
@@ -18,6 +18,8 @@ router.get('/all', getAllUsers);
 router.get('/engineers', getEngineersByState);
 
 router.get('/users-without-attendance', getUsersWithoutAttendanceForToday);
+router.delete('/deleteUser', deleteUserByEmail);
+router.put('/updateUser', updateUserByEmail);
 
 
 module.exports = router;

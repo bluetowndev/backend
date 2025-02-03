@@ -153,4 +153,55 @@ const getUsersWithoutAttendanceForToday = async (req, res) => {
   }
 };
 
-module.exports = { loginUser, signupUser, getAllUsers, getUserByEmail, getEngineersByState, getUsersWithoutAttendanceForToday };
+const deleteUserByEmail = async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+
+  try {
+    const user = await User.findOneAndDelete({ email });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.status(200).json({ message: 'User deleted successfully', user });
+  } catch (error) {
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+};
+
+const updateUserByEmail = async (req, res) => {
+  const { email, fullName, phoneNumber, reportingManager, state } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: 'Email is required' });
+  }
+
+  try {
+    const updatedData = {};
+
+    if (fullName) updatedData.fullName = fullName;
+    if (phoneNumber) updatedData.phoneNumber = phoneNumber;
+    if (reportingManager) updatedData.reportingManager = reportingManager;
+    if (state) updatedData.state = state;
+
+    const user = await User.findOneAndUpdate(
+      { email },
+      { $set: updatedData },
+      { new: true, runValidators: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.status(200).json({ message: 'User updated successfully', user });
+  } catch (error) {
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+};
+
+module.exports = { loginUser, signupUser, getAllUsers, getUserByEmail, getEngineersByState, getUsersWithoutAttendanceForToday, deleteUserByEmail, updateUserByEmail };
