@@ -8,15 +8,21 @@ const createToken = (_id) => {
 
 // login a user
 const loginUser = async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password } = req.body; // Remove `state` from destructuring since it's not needed in the request body
 
   try {
     const user = await User.login(email, password);
 
-    // create a token
+    // Create a token
     const token = createToken(user._id);
 
-    res.status(200).json({ email, token, role: user.role });
+    // Include the user's state in the response
+    res.status(200).json({ 
+      email: user.email, 
+      token, 
+      state: user.state, // Add the state from the user object
+      role: user.role 
+    });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
