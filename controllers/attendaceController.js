@@ -640,30 +640,41 @@ const getUsersOnLeave = async (req, res) => {
 
 const getUserVisitCounts = async (req, res) => {
   try {
-    // Get the current date in 'YYYY-MM-DD' format
+    // Extract start and end dates from request query
+    const { startDate, endDate } = req.query;
+    
+    // Get the current date in 'YYYY-MM-DD' format if no date range is provided
     const currentDate = new Date().toISOString().split('T')[0];
+    
+    // Define date filter based on input
+    let dateFilter = {};
+    if (startDate && endDate) {
+      dateFilter = { date: { $gte: startDate, $lte: endDate } };
+    } else {
+      dateFilter = { date: currentDate };
+    }
 
-    // Step 1: Define excluded purposes
+    // Define excluded purposes
     const excludedPurposes = ['Check In', 'Check Out', 'On Leave'];
 
-    // Step 2: Aggregate attendance data for the current date and non-excluded purposes
+    // Aggregate attendance data for the given date range or current date
     const visitCounts = await Attendance.aggregate([
       {
         $match: {
-          date: currentDate, // Filter by current date
-          purpose: { $nin: excludedPurposes }, // Exclude specific purposes
+          ...dateFilter, // Apply dynamic date filter
+          purpose: { $nin: excludedPurposes },
         },
       },
       {
         $group: {
-          _id: '$user', // Group by user ID
+          _id: { user: '$user', date: '$date' }, // Group by user ID and date
           visitCount: { $sum: 1 }, // Count occurrences
         },
       },
       {
         $lookup: {
           from: 'users', // Reference the Users collection
-          localField: '_id',
+          localField: '_id.user',
           foreignField: '_id',
           as: 'userDetails',
         },
@@ -674,6 +685,7 @@ const getUserVisitCounts = async (req, res) => {
       {
         $project: {
           _id: 0,
+          date: '$_id.date',
           fullName: '$userDetails.fullName',
           email: '$userDetails.email',
           phoneNumber: '$userDetails.phoneNumber',
@@ -682,15 +694,19 @@ const getUserVisitCounts = async (req, res) => {
           visitCount: 1, // Include visit count
         },
       },
+      {
+        $sort: { date: 1 } // Sort records by date
+      }
     ]);
 
     // Respond with the visit counts
     res.status(200).json({ success: true, data: visitCounts });
   } catch (error) {
-    console.error('Error fetching user visit counts for today:', error);
+    console.error('Error fetching user visit counts:', error);
     res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 };
+
 
 const getUsersWithoutAttendance = async (req, res) => {
   try {
@@ -699,11 +715,15 @@ const getUsersWithoutAttendance = async (req, res) => {
     // Fetch users who marked attendance for the current day
     const usersWithAttendance = await Attendance.find({ date: todayDate }).distinct('user');
 
-    // Fetch users who have not marked attendance, exclude Delhi and Denmark states, and ensure role is 'user'
+    // Emails to exclude
+    const excludedEmails = ['rit.parmar@bluetown.com', 'cb@bluetown.com'];
+
+    // Fetch users who have not marked attendance, exclude specific states and emails, ensure role is 'user'
     const usersWithoutAttendance = await User.find({
       _id: { $nin: usersWithAttendance }, // Exclude users with attendance
       state: { $nin: ['Delhi', 'Denmark'] }, // Exclude Delhi and Denmark states
       role: 'user', // Ensure role is 'user'
+      email: { $nin: excludedEmails }, // Exclude specific emails
     }).select('fullName email state phoneNumber reportingManager'); // Select required fields
 
     res.status(200).json({
@@ -718,6 +738,7 @@ const getUsersWithoutAttendance = async (req, res) => {
     });
   }
 };
+
 
 const isFirstEntryToday = async (req, res) => {
   try {
