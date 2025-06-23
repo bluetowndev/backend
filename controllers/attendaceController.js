@@ -5,6 +5,7 @@ const { Buffer } = require('buffer');
 const sharp = require('sharp');
 const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 const TotalDistance = require('../models/distanceModel');
+const SiteVisitSummary = require('../models/siteVisitSummaryModel');
 
 //Configuration of cloudinary for converting the images into an url
 cloudinary.config({
@@ -513,88 +514,122 @@ const getUsersWithoutCheckIn = async (req, res) => {
 
 const getUsersWithoutCheckOut = async (req, res) => {
   try {
-    // Get the current date in 'YYYY-MM-DD' format
+    // Get start and end dates from query parameters, default to current date if not provided
+    const { startDate, endDate } = req.query;
     const currentDate = new Date().toISOString().split('T')[0];
+    const start = startDate || currentDate;
+    const end = endDate || currentDate;
 
-    // Step 1: Use aggregation to find users who have made "Check Out" entries for the current date
-    const usersWithCheckOut = await Attendance.aggregate([
-      {
-        $match: { purpose: 'Check Out', date: currentDate }, // Find all "Check Out" entries for today
-      },
-      {
-        $group: { _id: '$user' }, // Group by user ID to get unique users who checked out
-      },
-    ]);
-
-    // Step 2: Use aggregation to find users who have made "On Leave" entries for the current date
-    const usersOnLeave = await Attendance.aggregate([
-      {
-        $match: { purpose: 'On Leave', date: currentDate }, // Find all "On Leave" entries for today
-      },
-      {
-        $group: { _id: '$user' }, // Group by user ID to get unique users who are on leave
-      },
-    ]);
-
-    // Step 3: Extract IDs of users who have checked out or are on leave
-    const userIdsWithCheckOutOrOnLeave = [
-      ...new Set([
-        ...usersWithCheckOut.map((entry) => entry._id),
-        ...usersOnLeave.map((entry) => entry._id),
-      ]),
-    ];
-
-    // Step 4: Define exclusion criteria
-    const excludedEmails = [
-      'rit.parmar@bluetown.com',
-      'anuj.sonkar@bluetown.com',
-      'ajay.jha@bluetown.com',
-      'cb@bluetown.com',
-      'shiv.hundawal@bluetown.com',
-      'partha.ghosh@bluetown.com',
-      'punit.kumar@bluetown.com',
-      'sharat.jha@bluetown.com',
-      'pankaj.tiwari@bluetown.com',
-      'pushpraj.pachori@bluetown.com',
-      'test@test.com',
-    ];
-
-    // Step 5: Find attendance entries for users NOT in the above list and NOT from Delhi state
-    const attendanceEntries = await Attendance.find({
-      user: { $nin: userIdsWithCheckOutOrOnLeave }, // Exclude users who checked out or are on leave
-      date: currentDate,
-    })
-      .populate('user')
-      .lean(); // Convert mongoose documents to plain JavaScript objects
-
-    // Step 6: Filter out users based on exclusion criteria
-    const usersNotCheckedOut = attendanceEntries
-      .filter(
-        (entry) =>
-          entry.user && // Ensure user is not null
-          !excludedEmails.includes(entry.user.email) && // Exclude specific emails
-          entry.user.state !== 'Delhi' // Exclude users from Delhi
-      )
-      .map((entry) => {
-        const { fullName, state, email, phoneNumber, reportingManager } = entry.user;
-        return { fullName, state, email, phoneNumber, reportingManager };
-      });
-
-    // Step 7: Remove duplicates (users may have multiple attendance entries)
-    const uniqueUsers = [];
-    const seenUserEmails = new Set();
-
-    for (const user of usersNotCheckedOut) {
-      if (!seenUserEmails.has(user.email)) {
-        uniqueUsers.push(user);
-        seenUserEmails.add(user.email);
-      }
+    // Validate date format
+    if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+      return res.status(400).json({ success: false, message: 'Invalid start date format. Use YYYY-MM-DD' });
+    }
+    if (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+      return res.status(400).json({ success: false, message: 'Invalid end date format. Use YYYY-MM-DD' });
     }
 
-    // Respond with the list of unique users
-    res.status(200).json({ success: true, data: uniqueUsers });
+    // Ensure end date is not before start date
+    if (startDate && endDate && new Date(endDate) < new Date(startDate)) {
+      return res.status(400).json({ success: false, message: 'End date cannot be before start date' });
+    }
+
+    // Generate array of dates in the range
+    const dateRange = [];
+    let current = new Date(start);
+    const endDateObj = new Date(end);
+    while (current <= endDateObj) {
+      dateRange.push(current.toISOString().split('T')[0]);
+      current.setDate(current.getDate() + 1);
+    }
+
+    // Initialize result object to store date-wise data
+    const result = {};
+
+    // Process each date in the range
+    for (const date of dateRange) {
+      // Step 1: Find users who have made "Check Out" entries for the date
+      const usersWithCheckOut = await Attendance.aggregate([
+        {
+          $match: { purpose: 'Check Out', date }, // Find "Check Out" entries for the date
+        },
+        {
+          $group: { _id: '$user' }, // Group by user ID
+        },
+      ]);
+
+      // Step 2: Find users who have made "On Leave" entries for the date
+      const usersOnLeave = await Attendance.aggregate([
+        {
+          $match: { purpose: 'On Leave', date }, // Find "On Leave" entries for the date
+        },
+        {
+          $group: { _id: '$user' }, // Group by user ID
+        },
+      ]);
+
+      // Step 3: Extract IDs of users who have checked out or are on leave
+      const userIdsWithCheckOutOrOnLeave = [
+        ...new Set([
+          ...usersWithCheckOut.map((entry) => entry._id),
+          ...usersOnLeave.map((entry) => entry._id),
+        ]),
+      ];
+
+      // Step 4: Define exclusion criteria
+      const excludedEmails = [
+        'rit.parmar@bluetown.com',
+        'anuj.sonkar@bluetown.com',
+        'ajay.jha@bluetown.com',
+        'cb@bluetown.com',
+        'shiv.hundawal@bluetown.com',
+        'partha.ghosh@bluetown.com',
+        'punit.kumar@bluetown.com',
+        'sharat.jha@bluetown.com',
+        'pankaj.tiwari@bluetown.com',
+        'pushpraj.pachori@bluetown.com',
+        'test@test.com',
+      ];
+
+      // Step 5: Find attendance entries for users NOT in the above list and NOT from Delhi
+      const attendanceEntries = await Attendance.find({
+        user: { $nin: userIdsWithCheckOutOrOnLeave }, // Exclude users who checked out or are on leave
+        date,
+      })
+        .populate('user')
+        .lean();
+
+      // Step 6: Filter out users based on exclusion criteria
+      const usersNotCheckedOut = attendanceEntries
+        .filter(
+          (entry) =>
+            entry.user && // Ensure user is not null
+            !excludedEmails.includes(entry.user.email) && // Exclude specific emails
+            entry.user.state !== 'Delhi' // Exclude users from Delhi
+        )
+        .map((entry) => {
+          const { fullName, state, email, phoneNumber, reportingManager } = entry.user;
+          return { fullName, state, email, phoneNumber, reportingManager };
+        });
+
+      // Step 7: Remove duplicates
+      const uniqueUsers = [];
+      const seenUserEmails = new Set();
+
+      for (const user of usersNotCheckedOut) {
+        if (!seenUserEmails.has(user.email)) {
+          uniqueUsers.push(user);
+          seenUserEmails.add(user.email);
+        }
+      }
+
+      // Store results for this date
+      result[date] = uniqueUsers;
+    }
+
+    // Respond with the date-wise list of unique users
+    res.status(200).json({ success: true, data: result });
   } catch (error) {
-    console.error('Error fetching users not checked out today:', error);
+    console.error('Error fetching users not checked out:', error);
     res.status(500).json({ success: false, message: 'Internal Server Error' });
   }
 };
@@ -710,25 +745,60 @@ const getUserVisitCounts = async (req, res) => {
 
 const getUsersWithoutAttendance = async (req, res) => {
   try {
-    const todayDate = new Date().toISOString().split('T')[0]; // Get current date in YYYY-MM-DD format
+    // Get start and end dates from query parameters, default to current date if not provided
+    const { startDate, endDate } = req.query;
+    const currentDate = new Date().toISOString().split('T')[0];
+    const start = startDate || currentDate;
+    const end = endDate || currentDate;
 
-    // Fetch users who marked attendance for the current day
-    const usersWithAttendance = await Attendance.find({ date: todayDate }).distinct('user');
+    // Validate date format
+    if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+      return res.status(400).json({ success: false, message: 'Invalid start date format. Use YYYY-MM-DD' });
+    }
+    if (endDate && !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+      return res.status(400).json({ success: false, message: 'Invalid end date format. Use YYYY-MM-DD' });
+    }
+
+    // Ensure end date is not before start date
+    if (startDate && endDate && new Date(endDate) < new Date(startDate)) {
+      return res.status(400).json({ success: false, message: 'End date cannot be before start date' });
+    }
+
+    // Generate array of dates in the range
+    const dateRange = [];
+    let current = new Date(start);
+    const endDateObj = new Date(end);
+    while (current <= endDateObj) {
+      dateRange.push(current.toISOString().split('T')[0]);
+      current.setDate(current.getDate() + 1);
+    }
+
+    // Initialize result object to store date-wise data
+    const result = {};
 
     // Emails to exclude
     const excludedEmails = ['rit.parmar@bluetown.com', 'cb@bluetown.com'];
 
-    // Fetch users who have not marked attendance, exclude specific states and emails, ensure role is 'user'
-    const usersWithoutAttendance = await User.find({
-      _id: { $nin: usersWithAttendance }, // Exclude users with attendance
-      state: { $nin: ['Delhi', 'Denmark'] }, // Exclude Delhi and Denmark states
-      role: 'user', // Ensure role is 'user'
-      email: { $nin: excludedEmails }, // Exclude specific emails
-    }).select('fullName email state phoneNumber reportingManager'); // Select required fields
+    // Process each date in the range
+    for (const date of dateRange) {
+      // Fetch users who marked attendance for the current date
+      const usersWithAttendance = await Attendance.find({ date }).distinct('user');
+
+      // Fetch users who have not marked attendance, exclude specific states and emails, ensure role is 'user'
+      const usersWithoutAttendance = await User.find({
+        _id: { $nin: usersWithAttendance }, // Exclude users with attendance
+        state: { $nin: ['Delhi', 'Denmark'] }, // Exclude Delhi and Denmark states
+        role: 'user', // Ensure role is 'user'
+        email: { $nin: excludedEmails }, // Exclude specific emails
+      }).select('fullName email state phoneNumber reportingManager'); // Select required fields
+
+      // Store results for this date
+      result[date] = usersWithoutAttendance;
+    }
 
     res.status(200).json({
       success: true,
-      data: usersWithoutAttendance,
+      data: result,
     });
   } catch (error) {
     console.error('Error fetching users without attendance:', error);
@@ -759,5 +829,74 @@ const isFirstEntryToday = async (req, res) => {
   }
 };
 
+const getLastSiteVisit = async (req, res) => {
+  try {
+    const lastSiteVisit = await Attendance.findOne({
+      user: req.user._id,
+      purpose: 'Site Visit',
+      date: new Date().toISOString().split('T')[0]
+    }).sort({ timestamp: -1 });
 
-module.exports = { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getLocationName, getAttendanceWithDistances, getAttendanceSummary, saveTotalDistance, getUsersWithoutCheckIn, getUsersWithoutCheckOut, getUsersOnLeave, getUserVisitCounts, getUsersWithoutAttendance, isFirstEntryToday };
+    if (!lastSiteVisit) {
+      return res.status(200).json({ hasPreviousSiteVisit: false });
+    }
+
+    // Check if summary already exists for this site visit
+    const existingSummary = await SiteVisitSummary.findOne({
+      attendance: lastSiteVisit._id,
+      user: req.user._id
+    });
+
+    res.status(200).json({
+      hasPreviousSiteVisit: true,
+      visitType: lastSiteVisit.subPurpose,
+      attendanceId: lastSiteVisit._id,
+      summarySubmitted: !!existingSummary // Will be true if summary exists, false otherwise
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Error checking last site visit' });
+  }
+};
+
+const saveSiteVisitSummary = async (req, res) => {
+  try {
+    const { attendanceId, issue } = req.body;
+
+    const attendance = await Attendance.findById(attendanceId);
+    if (!attendance) {
+      return res.status(404).json({ error: 'Attendance record not found' });
+    }
+
+    const summary = new SiteVisitSummary({
+      attendance: attendanceId,
+      visitType: attendance.subPurpose,
+      issue,
+      user: req.user._id
+    });
+
+    await summary.save();
+    res.status(201).json({ message: 'Site visit summary saved successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Error saving site visit summary' });
+  }
+};
+
+module.exports = {
+  markAttendance,
+  getAttendanceByDate,
+  getAllAttendance,
+  getFilteredAttendance,
+  getEmailAttendance,
+  getLocationName,
+  getAttendanceWithDistances,
+  getAttendanceSummary,
+  saveTotalDistance,
+  getUsersWithoutCheckIn,
+  getUsersWithoutCheckOut,
+  getUsersOnLeave,
+  getUserVisitCounts,
+  getUsersWithoutAttendance,
+  isFirstEntryToday,
+  getLastSiteVisit,
+  saveSiteVisitSummary
+};
