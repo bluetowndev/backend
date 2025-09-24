@@ -881,6 +881,100 @@ const saveSiteVisitSummary = async (req, res) => {
   }
 };
 
+const getUserDashboardStats = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const today = new Date();
+    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+
+    // Get all attendance records for the current month
+    const monthlyAttendance = await Attendance.find({
+      user: userId,
+      timestamp: {
+        $gte: startOfMonth,
+        $lte: endOfMonth
+      }
+    }).sort({ timestamp: 1 });
+
+    // Calculate attendance rate
+    const totalDaysInMonth = endOfMonth.getDate();
+    const weekends = Math.floor(totalDaysInMonth / 7) * 2; // Approximate weekends
+    const totalWorkingDays = totalDaysInMonth - weekends;
+    const daysPresent = new Set(monthlyAttendance.map(a => a.date)).size;
+    const attendanceRate = ((daysPresent / totalWorkingDays) * 100).toFixed(1);
+
+    // Calculate average check-in time
+    const checkIns = monthlyAttendance.filter(a => a.purpose === 'Check In');
+    let avgCheckInTime = '00:00';
+    if (checkIns.length > 0) {
+      const totalMinutes = checkIns.reduce((acc, curr) => {
+        const date = new Date(curr.timestamp);
+        return acc + (date.getHours() * 60 + date.getMinutes());
+      }, 0);
+      const averageMinutes = Math.round(totalMinutes / checkIns.length);
+      const hours = Math.floor(averageMinutes / 60);
+      const minutes = averageMinutes % 60;
+      avgCheckInTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    }
+
+    // Calculate site visits for current month
+    const siteVisits = monthlyAttendance.filter(a => 
+      a.purpose === 'Site Visit' || 
+      a.purpose === 'New Site Survey'
+    ).length;
+
+    // Get today's total distance
+    const todayDate = new Date().toISOString().split('T')[0];
+    const todayDistance = await TotalDistance.findOne({
+      userId,
+      date: todayDate
+    });
+
+    // Calculate attendance trend
+    const previousMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const previousMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+    
+    const previousMonthAttendance = await Attendance.find({
+      user: userId,
+      timestamp: {
+        $gte: previousMonth,
+        $lte: previousMonthEnd
+      }
+    });
+
+    const previousMonthDays = new Set(previousMonthAttendance.map(a => a.date)).size;
+    const previousMonthWeekends = Math.floor(previousMonthEnd.getDate() / 7) * 2;
+    const previousMonthWorkingDays = previousMonthEnd.getDate() - previousMonthWeekends;
+    const previousRate = (previousMonthDays / previousMonthWorkingDays) * 100;
+    const attendanceChange = ((attendanceRate - previousRate) / previousRate * 100).toFixed(1);
+
+    // Get check-in status for today
+    const todayCheckIn = checkIns.find(a => a.date === todayDate);
+    const checkInStatus = todayCheckIn 
+      ? new Date(todayCheckIn.timestamp).getHours() < 10 ? 'On Time' : 'Late'
+      : 'Pending';
+
+    const stats = {
+      attendanceRate: `${attendanceRate}%`,
+      averageCheckIn: avgCheckInTime,
+      siteVisits,
+      todayDistance: todayDistance ? `${todayDistance.totalDistance.toFixed(1)} km` : '0 km',
+      trendData: {
+        attendanceChange: `${attendanceChange > 0 ? '+' : ''}${attendanceChange}%`,
+        checkInStatus,
+        siteVisitsPeriod: 'This Month',
+        distanceStatus: 'Today'
+      }
+    };
+
+    res.status(200).json(stats);
+  } catch (error) {
+    console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({ error: 'Failed to fetch dashboard statistics' });
+  }
+};
+
 module.exports = {
   markAttendance,
   getAttendanceByDate,
@@ -898,5 +992,6 @@ module.exports = {
   getUsersWithoutAttendance,
   isFirstEntryToday,
   getLastSiteVisit,
-  saveSiteVisitSummary
+  saveSiteVisitSummary,
+  getUserDashboardStats
 };

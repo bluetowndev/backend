@@ -1,6 +1,6 @@
 const express = require('express');
 const requireAuth = require('../middleware/requireAuth');
-const { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getAttendanceWithDistances, getAttendanceSummary, saveTotalDistance, getUsersWithoutCheckIn, getUsersWithoutCheckOut, getUsersOnLeave, getUserVisitCounts, getUsersWithoutAttendance, isFirstEntryToday, getLastSiteVisit, saveSiteVisitSummary } = require('../controllers/attendaceController');
+const { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getAttendanceWithDistances, getAttendanceSummary, saveTotalDistance, getUsersWithoutCheckIn, getUsersWithoutCheckOut, getUsersOnLeave, getUserVisitCounts, getUsersWithoutAttendance, isFirstEntryToday, getLastSiteVisit, saveSiteVisitSummary, getUserDashboardStats } = require('../controllers/attendaceController');
 const multer = require('multer');
 
 const router = express.Router();
@@ -24,5 +24,6 @@ router.get('/absent', getUsersWithoutAttendance);
 router.get('/first-entry', isFirstEntryToday);
 router.get('/last-site-visit', getLastSiteVisit);
 router.post('/site-visit-summary', saveSiteVisitSummary);
+router.get('/dashboard-stats', getUserDashboardStats);
 
 module.exports = router;
