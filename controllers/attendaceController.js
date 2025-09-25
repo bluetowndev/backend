@@ -884,9 +884,9 @@ const saveSiteVisitSummary = async (req, res) => {
 const getUserDashboardStats = async (req, res) => {
   try {
     const userId = req.user._id;
-    const today = new Date();
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    const currentDate = new Date();
+    const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
+    const endOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
 
     // Get all attendance records for the current month
     const monthlyAttendance = await Attendance.find({
@@ -918,22 +918,34 @@ const getUserDashboardStats = async (req, res) => {
       avgCheckInTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
     }
 
-    // Calculate site visits for current month
+    // Calculate site visits for current month (all entries except Check In/Out)
     const siteVisits = monthlyAttendance.filter(a => 
-      a.purpose === 'Site Visit' || 
-      a.purpose === 'New Site Survey'
+      a.purpose !== 'Check In' && 
+      a.purpose !== 'Check Out'
     ).length;
 
-    // Get today's total distance
+    // Get today's total distance and date
     const todayDate = new Date().toISOString().split('T')[0];
     const todayDistance = await TotalDistance.findOne({
       userId,
       date: todayDate
     });
 
+    // Get monthly total distance
+    const monthlyDistances = await TotalDistance.find({
+      userId,
+      date: {
+        $gte: startOfMonth.toISOString().split('T')[0],
+        $lte: todayDate
+      }
+    });
+    
+    const monthlyTotalDistance = monthlyDistances.reduce((total, record) => 
+      total + (record.totalDistance || 0), 0);
+
     // Calculate attendance trend
-    const previousMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    const previousMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+    const previousMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
+    const previousMonthEnd = new Date(currentDate.getFullYear(), currentDate.getMonth(), 0);
     
     const previousMonthAttendance = await Attendance.find({
       user: userId,
@@ -960,6 +972,8 @@ const getUserDashboardStats = async (req, res) => {
       averageCheckIn: avgCheckInTime,
       siteVisits,
       todayDistance: todayDistance ? `${todayDistance.totalDistance.toFixed(1)} km` : '0 km',
+      monthlyTotalDistance: `${monthlyTotalDistance.toFixed(1)} km`,
+      currentDate: todayDate,
       trendData: {
         attendanceChange: `${attendanceChange > 0 ? '+' : ''}${attendanceChange}%`,
         checkInStatus,
