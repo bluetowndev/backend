@@ -39,6 +39,7 @@ app.use((req, res, next) => {
 // routes
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/site-allocation', require('./routes/siteAllocation'));
 
 // connect to db
 mongoose.connect(process.env.MONGO_URI)
