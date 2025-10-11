@@ -989,6 +989,491 @@ const getUserDashboardStats = async (req, res) => {
   }
 };
 
+// Helper function to calculate transit time between two timestamps
+const calculateTransitTime = (timestamp1, timestamp2) => {
+  const time1 = new Date(timestamp1);
+  const time2 = new Date(timestamp2);
+  const durationInMinutes = Math.floor((time2 - time1) / 60000);
+  const hours = Math.floor(durationInMinutes / 60);
+  const minutes = durationInMinutes % 60;
+  return `${hours > 0 ? `${hours} hr ` : ''}${minutes} min`;
+};
+
+// Function to migrate all historical distances for all users
+const migrateAllDistances = async (req, res) => {
+  try {
+    console.log('Starting distance migration for all users...');
+    
+    // Get all users
+    const users = await User.find({});
+    let totalProcessed = 0;
+    let totalUpdated = 0;
+    let errors = [];
+
+    for (const user of users) {
+      try {
+        // Get all unique dates for this user's attendance
+        const uniqueDates = await Attendance.distinct('date', { user: user._id });
+        
+        for (const date of uniqueDates) {
+          try {
+            // Check if distance already exists for this date
+            const existingDistance = await TotalDistance.findOne({ 
+              userId: user._id, 
+              date 
+            });
+
+            // Get all attendance records for this date
+            const startDate = new Date(date);
+            startDate.setUTCHours(0, 0, 0, 0);
+            const endDate = new Date(startDate);
+            endDate.setUTCHours(23, 59, 59, 999);
+
+            const attendances = await Attendance.find({
+              user: user._id,
+              timestamp: { $gte: startDate, $lt: endDate }
+            }).sort({ timestamp: 1 });
+
+            if (attendances.length > 1) {
+              // Calculate distances between points
+              const locations = attendances.map(a => a.location);
+              const distances = await calculateDistanceBetweenPoints(locations);
+
+              // Calculate total distance and point-to-point details
+              let totalMeters = 0;
+              const pointToPointDistances = [];
+
+              attendances.forEach((attendance, index) => {
+                if (index > 0) {
+                  let distance = distances[index - 1] || "0 m";
+                  let numericDistance = 0;
+
+                  if (distance.includes("km")) {
+                    numericDistance = parseFloat(distance) * 1000;
+                  } else if (distance.includes("m")) {
+                    numericDistance = parseFloat(distance);
+                  }
+
+                  totalMeters += numericDistance;
+
+                  // Calculate transit time
+                  const transitTime = calculateTransitTime(
+                    attendances[index - 1].timestamp,
+                    attendance.timestamp
+                  );
+
+                  pointToPointDistances.push({
+                    from: attendances[index - 1].locationName || "Unknown",
+                    to: attendance.locationName || "Unknown",
+                    distance: numericDistance / 1000,
+                    transitTime
+                  });
+                }
+              });
+
+              const totalKilometers = totalMeters / 1000;
+
+              // Update or create distance record
+              await TotalDistance.findOneAndUpdate(
+                { userId: user._id, date },
+                { 
+                  totalDistance: totalKilometers,
+                  pointToPointDistances 
+                },
+                { upsert: true, new: true }
+              );
+
+              totalUpdated++;
+              console.log(`Updated distance for user ${user.email} on ${date}: ${totalKilometers.toFixed(2)} km`);
+            }
+            
+            totalProcessed++;
+          } catch (dateError) {
+            console.error(`Error processing date ${date} for user ${user.email}:`, dateError.message);
+            errors.push({ 
+              user: user.email, 
+              date, 
+              error: dateError.message 
+            });
+          }
+        }
+      } catch (userError) {
+        console.error(`Error processing user ${user.email}:`, userError.message);
+        errors.push({ 
+          user: user.email, 
+          error: userError.message 
+        });
+      }
+    }
+
+    console.log('Distance migration completed!');
+    res.status(200).json({
+      success: true,
+      message: 'Distance migration completed',
+      stats: {
+        totalUsers: users.length,
+        totalDatesProcessed: totalProcessed,
+        totalDistancesUpdated: totalUpdated,
+        errors: errors.length
+      },
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error('Error during distance migration:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Error during distance migration',
+      message: error.message 
+    });
+  }
+};
+
+// Get user movement tracking with detailed journey
+const getUserMovementTracking = async (req, res) => {
+  try {
+    const { userId, email, state, startDate, endDate } = req.query;
+
+    // Build query filters
+    let userFilter = {};
+    if (email) {
+      const user = await User.findOne({ email });
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      userFilter = { _id: user._id };
+    } else if (userId) {
+      userFilter = { _id: userId };
+    } else if (state && state !== 'all') {
+      const usersInState = await User.find({ state }).distinct('_id');
+      userFilter = { _id: { $in: usersInState } };
+    }
+
+    // Date range filter
+    const start = new Date(startDate || new Date().toISOString().split('T')[0]);
+    start.setUTCHours(0, 0, 0, 0);
+    
+    const end = endDate ? new Date(endDate) : new Date(start);
+    end.setUTCHours(23, 59, 59, 999);
+
+    // Get attendance records
+    let attendanceQuery = {
+      timestamp: { $gte: start, $lte: end }
+    };
+
+    if (Object.keys(userFilter).length > 0) {
+      if (userFilter._id) {
+        attendanceQuery.user = userFilter._id;
+      } else {
+        attendanceQuery.user = userFilter;
+      }
+    }
+
+    const attendanceRecords = await Attendance.find(attendanceQuery)
+      .populate('user', 'email fullName phoneNumber state reportingManager')
+      .sort({ user: 1, timestamp: 1 });
+
+    // Group by user and date
+    const userMovements = {};
+
+    for (const record of attendanceRecords) {
+      if (!record.user) continue;
+
+      const userId = record.user._id.toString();
+      const date = record.date;
+
+      if (!userMovements[userId]) {
+        userMovements[userId] = {
+          userInfo: {
+            id: record.user._id,
+            email: record.user.email,
+            fullName: record.user.fullName,
+            phoneNumber: record.user.phoneNumber,
+            state: record.user.state,
+            reportingManager: record.user.reportingManager
+          },
+          dailyMovements: {}
+        };
+      }
+
+      if (!userMovements[userId].dailyMovements[date]) {
+        userMovements[userId].dailyMovements[date] = {
+          date,
+          movements: [],
+          totalDistance: 0,
+          startLocation: null,
+          endLocation: null,
+          checkInTime: null,
+          checkOutTime: null,
+          siteVisits: 0
+        };
+      }
+
+      const movement = {
+        id: record._id,
+        timestamp: record.timestamp,
+        purpose: record.purpose,
+        subPurpose: record.subPurpose,
+        location: record.location,
+        locationName: record.locationName,
+        feedback: record.feedback,
+        image: record.image
+      };
+
+      userMovements[userId].dailyMovements[date].movements.push(movement);
+
+      // Track check-in/check-out
+      if (record.purpose === 'Check In') {
+        userMovements[userId].dailyMovements[date].checkInTime = record.timestamp;
+        userMovements[userId].dailyMovements[date].startLocation = {
+          name: record.locationName,
+          coordinates: record.location
+        };
+      } else if (record.purpose === 'Check Out') {
+        userMovements[userId].dailyMovements[date].checkOutTime = record.timestamp;
+        userMovements[userId].dailyMovements[date].endLocation = {
+          name: record.locationName,
+          coordinates: record.location
+        };
+      } else if (record.purpose === 'Site Visit') {
+        userMovements[userId].dailyMovements[date].siteVisits++;
+      }
+    }
+
+    // Fetch distance data for each user and date
+    for (const userId in userMovements) {
+      for (const date in userMovements[userId].dailyMovements) {
+        const distanceRecord = await TotalDistance.findOne({
+          userId: userId,
+          date: date
+        });
+
+        if (distanceRecord) {
+          userMovements[userId].dailyMovements[date].totalDistance = distanceRecord.totalDistance;
+          userMovements[userId].dailyMovements[date].pointToPointDistances = distanceRecord.pointToPointDistances;
+        }
+      }
+    }
+
+    // Convert to array format
+    const result = Object.values(userMovements).map(user => ({
+      ...user,
+      dailyMovements: Object.values(user.dailyMovements).sort((a, b) => 
+        new Date(b.date) - new Date(a.date)
+      )
+    }));
+
+    res.status(200).json({
+      success: true,
+      count: result.length,
+      data: result
+    });
+
+  } catch (error) {
+    console.error('Error fetching user movement tracking:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch user movement tracking',
+      message: error.message 
+    });
+  }
+};
+
+// Get enhanced admin dashboard statistics
+const getAdminDashboardStats = async (req, res) => {
+  try {
+    const { startDate, endDate, state } = req.query;
+
+    // Date range
+    const start = new Date(startDate || new Date(new Date().setDate(new Date().getDate() - 30)));
+    start.setUTCHours(0, 0, 0, 0);
+    
+    const end = endDate ? new Date(endDate) : new Date();
+    end.setUTCHours(23, 59, 59, 999);
+
+    // Get all users or filtered by state
+    let userQuery = {};
+    if (state && state !== 'all') {
+      userQuery.state = state;
+    }
+    const allUsers = await User.find(userQuery);
+    const totalUsers = allUsers.length;
+
+    // Get attendance data for date range
+    const attendanceQuery = {
+      timestamp: { $gte: start, $lte: end }
+    };
+    
+    if (state && state !== 'all') {
+      const userIds = allUsers.map(u => u._id);
+      attendanceQuery.user = { $in: userIds };
+    }
+
+    const attendanceData = await Attendance.find(attendanceQuery)
+      .populate('user', 'email fullName state phoneNumber');
+
+    // Calculate statistics
+    const uniqueActiveUsers = new Set(attendanceData.map(a => a.user?._id.toString())).size;
+    const totalAttendanceEntries = attendanceData.length;
+    
+    // Check-in/Check-out stats
+    const checkIns = attendanceData.filter(a => a.purpose === 'Check In').length;
+    const checkOuts = attendanceData.filter(a => a.purpose === 'Check Out').length;
+    const siteVisits = attendanceData.filter(a => a.purpose === 'Site Visit').length;
+    
+    // State-wise breakdown
+    const stateWiseStats = {};
+    allUsers.forEach(user => {
+      if (!stateWiseStats[user.state]) {
+        stateWiseStats[user.state] = {
+          totalUsers: 0,
+          activeUsers: 0,
+          attendanceCount: 0
+        };
+      }
+      stateWiseStats[user.state].totalUsers++;
+    });
+
+    const activeUsersByState = {};
+    attendanceData.forEach(entry => {
+      if (entry.user && entry.user.state) {
+        if (!activeUsersByState[entry.user.state]) {
+          activeUsersByState[entry.user.state] = new Set();
+        }
+        activeUsersByState[entry.user.state].add(entry.user._id.toString());
+        stateWiseStats[entry.user.state].attendanceCount++;
+      }
+    });
+
+    Object.keys(activeUsersByState).forEach(state => {
+      if (stateWiseStats[state]) {
+        stateWiseStats[state].activeUsers = activeUsersByState[state].size;
+      }
+    });
+
+    // Get distance statistics
+    const distanceRecords = await TotalDistance.find({
+      date: {
+        $gte: start.toISOString().split('T')[0],
+        $lte: end.toISOString().split('T')[0]
+      }
+    });
+
+    const totalDistanceCovered = distanceRecords.reduce((sum, record) => 
+      sum + (record.totalDistance || 0), 0);
+    const avgDistancePerUser = uniqueActiveUsers > 0 
+      ? (totalDistanceCovered / uniqueActiveUsers).toFixed(2) 
+      : 0;
+
+    // Top performers by attendance
+    const userAttendanceCount = {};
+    attendanceData.forEach(entry => {
+      if (entry.user) {
+        const userId = entry.user._id.toString();
+        if (!userAttendanceCount[userId]) {
+          userAttendanceCount[userId] = {
+            user: entry.user,
+            count: 0,
+            siteVisits: 0
+          };
+        }
+        userAttendanceCount[userId].count++;
+        if (entry.purpose === 'Site Visit') {
+          userAttendanceCount[userId].siteVisits++;
+        }
+      }
+    });
+
+    const topPerformers = Object.values(userAttendanceCount)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10)
+      .map(item => ({
+        userId: item.user._id,
+        fullName: item.user.fullName,
+        email: item.user.email,
+        state: item.user.state,
+        attendanceCount: item.count,
+        siteVisits: item.siteVisits
+      }));
+
+    // Daily trend analysis
+    const dailyStats = {};
+    attendanceData.forEach(entry => {
+      const date = entry.date;
+      if (!dailyStats[date]) {
+        dailyStats[date] = {
+          date,
+          checkIns: 0,
+          checkOuts: 0,
+          siteVisits: 0,
+          uniqueUsers: new Set()
+        };
+      }
+      dailyStats[date].uniqueUsers.add(entry.user?._id.toString());
+      if (entry.purpose === 'Check In') dailyStats[date].checkIns++;
+      if (entry.purpose === 'Check Out') dailyStats[date].checkOuts++;
+      if (entry.purpose === 'Site Visit') dailyStats[date].siteVisits++;
+    });
+
+    const dailyTrends = Object.values(dailyStats).map(day => ({
+      date: day.date,
+      checkIns: day.checkIns,
+      checkOuts: day.checkOuts,
+      siteVisits: day.siteVisits,
+      activeUsers: day.uniqueUsers.size
+    })).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    // Recent activity
+    const recentActivity = attendanceData
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+      .slice(0, 20)
+      .map(entry => ({
+        id: entry._id,
+        user: entry.user ? {
+          fullName: entry.user.fullName,
+          email: entry.user.email,
+          state: entry.user.state
+        } : null,
+        purpose: entry.purpose,
+        locationName: entry.locationName,
+        timestamp: entry.timestamp,
+        date: entry.date
+      }));
+
+    res.status(200).json({
+      success: true,
+      stats: {
+        overview: {
+          totalUsers,
+          activeUsers: uniqueActiveUsers,
+          inactiveUsers: totalUsers - uniqueActiveUsers,
+          totalAttendanceEntries,
+          checkIns,
+          checkOuts,
+          siteVisits,
+          totalDistanceCovered: totalDistanceCovered.toFixed(2),
+          avgDistancePerUser
+        },
+        stateWiseStats,
+        topPerformers,
+        dailyTrends,
+        recentActivity
+      },
+      dateRange: {
+        start: start.toISOString().split('T')[0],
+        end: end.toISOString().split('T')[0]
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching admin dashboard stats:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Failed to fetch dashboard statistics',
+      message: error.message 
+    });
+  }
+};
+
 module.exports = {
   markAttendance,
   getAttendanceByDate,
@@ -1007,5 +1492,8 @@ module.exports = {
   isFirstEntryToday,
   getLastSiteVisit,
   saveSiteVisitSummary,
-  getUserDashboardStats
+  getUserDashboardStats,
+  migrateAllDistances,
+  getUserMovementTracking,
+  getAdminDashboardStats
 };

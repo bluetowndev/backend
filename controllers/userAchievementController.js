@@ -42,6 +42,11 @@ const getUserAchievementsByEmail = async (req, res) => {
 // Get current user's achievements (for authenticated user)
 const getCurrentUserAchievements = async (req, res) => {
   try {
+    // Check if user is authenticated
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+    
     const userId = req.user._id;
 
     // Find user achievements
