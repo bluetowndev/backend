@@ -37,9 +37,25 @@ const compressImageToTargetSize = async (buffer, maxSizeInKB) => {
   return resizedBuffer;
 };
 
+// In-memory cache for geocoding results to reduce API calls
+const geocodeCache = new Map();
+const GEOCODE_CACHE_SIZE = 1000; // Limit cache size
+const GEOCODE_PRECISION = 3; // Decimal places for coordinate rounding
+
 //Function to fetch location name from the latitude and longitude
 const getLocationName = async (lat, lng) => {
   try {
+    // Round coordinates to reduce cache size and reuse nearby locations
+    const roundedLat = parseFloat(lat.toFixed(GEOCODE_PRECISION));
+    const roundedLng = parseFloat(lng.toFixed(GEOCODE_PRECISION));
+    const cacheKey = `${roundedLat},${roundedLng}`;
+
+    // Check cache first
+    if (geocodeCache.has(cacheKey)) {
+      console.log(`Geocode cache hit for ${cacheKey}`);
+      return geocodeCache.get(cacheKey);
+    }
+
     const response = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&result_type=street_address&key=${GMAP_API_KEY}`);
     const data = await response.json();
 
@@ -47,11 +63,20 @@ const getLocationName = async (lat, lng) => {
       throw new Error(`Geocoding API error: ${data.status}`);
     }
 
+    let locationName = "Unknown location";
     if (data.results.length > 0) {
-      return data.results[0].formatted_address;
-    } else {
-      throw new Error("No results found");
+      locationName = data.results[0].formatted_address;
     }
+
+    // Store in cache with size limit
+    if (geocodeCache.size >= GEOCODE_CACHE_SIZE) {
+      // Remove oldest entry (first entry in Map)
+      const firstKey = geocodeCache.keys().next().value;
+      geocodeCache.delete(firstKey);
+    }
+    geocodeCache.set(cacheKey, locationName);
+
+    return locationName;
   } catch (error) {
     console.error("Error fetching location name:", error);
     return "Unknown location";
@@ -202,6 +227,13 @@ const getEmailAttendance = async (req, res) => {
 };
 
 const calculateDistanceBetweenPoints = async (locations) => {
+  // OPTIMIZATION: Limit batch size to avoid hitting API limits and reduce costs
+  const MAX_BATCH_SIZE = 25; // Google Maps allows up to 25 origins × 25 destinations per request
+  
+  if (locations.length > MAX_BATCH_SIZE) {
+    console.warn(`Large batch detected: ${locations.length} locations. Consider splitting.`);
+  }
+
   const origins = locations.slice(0, -1).map((loc) => `${loc.lat},${loc.lng}`);
   const destinations = locations.slice(1).map((loc) => `${loc.lat},${loc.lng}`);
 
@@ -212,10 +244,14 @@ const calculateDistanceBetweenPoints = async (locations) => {
   });
 
   try {
+    console.log(`Calling Distance Matrix API for ${origins.length} origin(s)`);
     const response = await fetch(`https://maps.googleapis.com/maps/api/distancematrix/json?${params}`);
     const data = await response.json();
 
-    // console.log("API Response Data:", JSON.stringify(data, null, 2)); // Debugging API response
+    // Log API usage for monitoring
+    if (data.status === 'OK') {
+      console.log(`Distance Matrix API: Successfully calculated ${origins.length} distance(s)`);
+    }
 
     if (data.status !== 'OK' || !data.rows) {
       throw new Error(`Distance Matrix API error: ${data.status}`);
@@ -225,9 +261,6 @@ const calculateDistanceBetweenPoints = async (locations) => {
     const distances = data.rows.map((row, index) => {
       const element = row.elements[index]; // Use matching index pairing
       if (element && element.status === 'OK' && element.distance) {
-        // console.log(
-        //   `From: ${origins[index]} To: ${destinations[index]} - Distance: ${element.distance.text}`
-        // );
         return element.distance.text;
       } else {
         console.warn(`Invalid distance data for index ${index}`);
@@ -262,9 +295,26 @@ const getAttendanceWithDistances = async (req, res) => {
     });
 
     if (attendances.length > 1) {
-      const locations = attendances.map(attendance => attendance.location);
+      // OPTIMIZATION: Check if distances are already stored to avoid API call
+      const existingDistance = await TotalDistance.findOne({
+        userId: userId,
+        date: date
+      });
 
-      const distances = await calculateDistanceBetweenPoints(locations);
+      let distances;
+      if (existingDistance && existingDistance.pointToPointDistances && existingDistance.pointToPointDistances.length > 0) {
+        // Use stored distances instead of calling API
+        console.log(`Using cached distances for user ${userId} on ${date}`);
+        distances = existingDistance.pointToPointDistances.map(pt => {
+          const km = pt.distance;
+          return km >= 1 ? `${km.toFixed(2)} km` : `${(km * 1000).toFixed(0)} m`;
+        });
+      } else {
+        // Calculate distances using API only if not stored
+        console.log(`Calculating new distances for user ${userId} on ${date}`);
+        const locations = attendances.map(attendance => attendance.location);
+        distances = await calculateDistanceBetweenPoints(locations);
+      }
 
       attendances.forEach((attendance, index) => {
         if (index > 0) {
@@ -1017,11 +1067,17 @@ const migrateAllDistances = async (req, res) => {
         
         for (const date of uniqueDates) {
           try {
-            // Check if distance already exists for this date
+            // OPTIMIZATION: Skip if distance already exists for this date
             const existingDistance = await TotalDistance.findOne({ 
               userId: user._id, 
               date 
             });
+
+            if (existingDistance && existingDistance.pointToPointDistances && existingDistance.pointToPointDistances.length > 0) {
+              console.log(`Skipping ${date} for user ${user.email} - distance already exists`);
+              totalProcessed++;
+              continue; // Skip to next date to avoid unnecessary API call
+            }
 
             // Get all attendance records for this date
             const startDate = new Date(date);
