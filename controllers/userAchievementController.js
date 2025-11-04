@@ -152,7 +152,7 @@ const bulkImportAchievements = async (req, res) => {
 
     for (const achievementData of achievementsData) {
       try {
-        const { email, september2025, october2025 } = achievementData;
+        const { email, september2025, october2025, november2025 } = achievementData;
 
         if (!email) {
           errors.push({ email: 'N/A', error: 'Email is required' });
@@ -206,6 +206,23 @@ const bulkImportAchievements = async (req, res) => {
               month: 'October', 
               year: 2025, 
               achievement: october2025 
+            });
+          }
+        }
+
+        // Add/update achievement for November 2025
+        if (november2025 !== undefined && november2025 !== null && november2025 !== '') {
+          const existingAchievementIndex = userAchievements.achievements.findIndex(
+            a => a.month === 'November' && a.year === 2025
+          );
+
+          if (existingAchievementIndex !== -1) {
+            userAchievements.achievements[existingAchievementIndex].achievement = november2025;
+          } else {
+            userAchievements.achievements.push({ 
+              month: 'November', 
+              year: 2025, 
+              achievement: november2025 
             });
           }
         }
