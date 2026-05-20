@@ -16,7 +16,7 @@ const userSchema = new Schema({
   },
   role: {
     type: String,
-    enum: ['user', 'admin', 'statehead'],
+    enum: ['user', 'admin', 'statehead', 'superadmin'],
     default: 'user'
   },
   fullName: {
@@ -34,6 +34,16 @@ const userSchema = new Schema({
   state: {
     type: String,
     required: true
+  },
+  /** First calendar day user is active (YYYY-MM-DD). If unset, derived from account _id timestamp. */
+  joinDate: {
+    type: String,
+    default: '',
+  },
+  /** Last calendar day of employment (YYYY-MM-DD). Days after this show EXIT in monthly sheet. */
+  employmentEndDate: {
+    type: String,
+    default: '',
   },
   resetPasswordToken: String,
   resetPasswordExpires: Date,
@@ -67,6 +77,8 @@ userSchema.statics.signup = async function(email, password, fullName, phoneNumbe
     role = 'admin';
   } else if (email === 'statehead@bluetown.com') {
     role = 'statehead';
+  } else if (email === 'superadmin@bluetown.com') {
+    role = 'superadmin';
   }
 
   const user = await this.create({ email, password: hash, role, fullName, phoneNumber, reportingManager, state });

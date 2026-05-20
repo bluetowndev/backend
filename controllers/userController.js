@@ -79,9 +79,14 @@ const getEngineersByState = async (req, res) => {
       dates.push(new Date(d).toISOString().split('T')[0]); // Format YYYY-MM-DD
     }
 
+    const matchStage = { role: 'user' };
+    if (state && state !== 'all') {
+      matchStage.state = state;
+    }
+
     const engineers = await User.aggregate([
-      { 
-        $match: { state, role: 'user' }
+      {
+        $match: matchStage
       },
       {
         $lookup: {
@@ -180,7 +185,7 @@ const deleteUserByEmail = async (req, res) => {
 };
 
 const updateUserByEmail = async (req, res) => {
-  const { email, fullName, phoneNumber, reportingManager, state } = req.body;
+  const { email, fullName, phoneNumber, reportingManager, state, joinDate, employmentEndDate } = req.body;
 
   if (!email) {
     return res.status(400).json({ error: 'Email is required' });
@@ -193,6 +198,8 @@ const updateUserByEmail = async (req, res) => {
     if (phoneNumber) updatedData.phoneNumber = phoneNumber;
     if (reportingManager) updatedData.reportingManager = reportingManager;
     if (state) updatedData.state = state;
+    if (joinDate !== undefined) updatedData.joinDate = joinDate === '' ? '' : String(joinDate).trim();
+    if (employmentEndDate !== undefined) updatedData.employmentEndDate = employmentEndDate === '' ? '' : String(employmentEndDate).trim();
 
     const user = await User.findOneAndUpdate(
       { email },

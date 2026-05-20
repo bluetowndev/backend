@@ -42,6 +42,7 @@ app.use('/api/user', userRoutes);
 app.use('/api/site-allocation', require('./routes/siteAllocation'));
 app.use('/api/user-targets', require('./routes/userTarget'));
 app.use('/api/user-achievements', require('./routes/userAchievement'));
+app.use('/api/leaves', require('./routes/leave'));
 
 // connect to db
 mongoose.connect(process.env.MONGO_URI)
