@@ -1,6 +1,6 @@
 const express = require('express');
 const requireAuth = require('../middleware/requireAuth');
-const { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getAttendanceWithDistances, getAttendanceSummary, saveTotalDistance, getUsersWithoutCheckIn, getUsersWithoutCheckOut, getUsersOnLeave, getUserVisitCounts, getUsersWithoutAttendance, isFirstEntryToday, getLastSiteVisit, saveSiteVisitSummary, getUserDashboardStats, migrateAllDistances, getUserMovementTracking, getAdminDashboardStats, testDistanceCalculation } = require('../controllers/attendaceController');
+const { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getAttendanceWithDistances, getAttendanceSummary, saveTotalDistance, getUsersWithoutCheckIn, getUsersWithoutCheckOut, getUsersOnLeave, getUserVisitCounts, getUsersWithoutAttendance, isFirstEntryToday, getLastSiteVisit, saveSiteVisitSummary, getUserDashboardStats, migrateAllDistances, getUserMovementTracking, getAdminDashboardStats, getMonthlyAttendanceMatrix, testDistanceCalculation } = require('../controllers/attendaceController');
 const multer = require('multer');
 
 const router = express.Router();
@@ -28,6 +28,7 @@ router.get('/dashboard-stats', getUserDashboardStats);
 router.post('/migrate-distances', migrateAllDistances);
 router.get('/movement-tracking', getUserMovementTracking);
 router.get('/admin-dashboard-stats', getAdminDashboardStats);
+router.get('/monthly-matrix', getMonthlyAttendanceMatrix);
 // router.get('/test-distance', testDistanceCalculation);
 
 module.exports = router;

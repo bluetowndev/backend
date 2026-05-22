@@ -60,7 +60,7 @@ const getLocationName = async (lat, lng) => {
 
 const markAttendance = async (req, res) => {
   // console.log("Request Body:", req.body);
-  const { location, image, purpose, feedback, subPurpose } = req.body;
+  const { location, image, purpose, feedback, subPurpose, userId } = req.body;
   if (!image) return res.status(400).json({ error: "Image is required" });
   if (!location) return res.status(400).json({ error: "Location is required" });
   if (!purpose) return res.status(400).json({ error: "Purpose of visit is required" });
@@ -79,6 +79,18 @@ const markAttendance = async (req, res) => {
       if (error) return res.status(500).json({ error: "Cloudinary upload failed" });
 
       try {
+        let targetUserId = req.user._id;
+        if (req.user.role === "superadmin" && userId) {
+          const targetUser = await User.findById(userId).select("_id role");
+          if (!targetUser) {
+            return res.status(404).json({ error: "Target user not found" });
+          }
+          if (targetUser.role !== "user") {
+            return res.status(400).json({ error: "Superadmin can only mark attendance for users" });
+          }
+          targetUserId = targetUser._id;
+        }
+
         const imageUrl = result.secure_url;
         const timestamp = new Date();
         const parsedLocation = JSON.parse(location);
@@ -93,7 +105,7 @@ const markAttendance = async (req, res) => {
           feedback,
           date: new Date().toISOString().split("T")[0],
           timestamp,
-          user: req.user._id,
+          user: targetUserId,
         });
 
         await attendance.save();
@@ -1474,6 +1486,210 @@ const getAdminDashboardStats = async (req, res) => {
   }
 };
 
+/** YYYY-MM-DD string comparison */
+const compareDateStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+
+const parseYmd = (s) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s).trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]) - 1;
+  const d = Number(m[3]);
+  return new Date(y, mo, d);
+};
+
+const formatYmd = (d) => {
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${day}`;
+};
+
+const enumerateDateStrings = (startStr, endStr) => {
+  const out = [];
+  let cur = parseYmd(startStr);
+  const end = parseYmd(endStr);
+  if (!cur || !end) return out;
+  while (compareDateStr(formatYmd(cur), endStr) <= 0) {
+    out.push(formatYmd(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return out;
+};
+
+const isSundayYmd = (dateStr) => {
+  const d = parseYmd(dateStr);
+  if (!d) return false;
+  return d.getDay() === 0;
+};
+
+const oidToJoinDateYmd = (id) => {
+  try {
+    const hex = id.toString();
+    const seconds = parseInt(hex.substring(0, 8), 16);
+    if (Number.isNaN(seconds)) return null;
+    return formatYmd(new Date(seconds * 1000));
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Attendance cycle: 26th of previous calendar month through 25th of selected month (endYear-endMonth).
+ * Query: endYear, endMonth (1-12), holidays=comma-separated YYYY-MM-DD, state optional (all|state name)
+ */
+const getMonthlyAttendanceMatrix = async (req, res) => {
+  try {
+    const role = req.user?.role;
+    if (!['admin', 'superadmin'].includes(role)) {
+      return res.status(403).json({ success: false, error: 'Forbidden' });
+    }
+
+    const endYear = Number(req.query.endYear);
+    const endMonth = Number(req.query.endMonth);
+    const holidaysRaw = req.query.holidays || '';
+    const state = req.query.state || 'all';
+
+    if (!endYear || !endMonth || endMonth < 1 || endMonth > 12) {
+      return res.status(400).json({ success: false, error: 'endYear and endMonth (1-12) are required' });
+    }
+
+    const cycleEnd = new Date(endYear, endMonth - 1, 25);
+    let cycleStart;
+    if (endMonth === 1) {
+      cycleStart = new Date(endYear - 1, 11, 26);
+    } else {
+      cycleStart = new Date(endYear, endMonth - 2, 26);
+    }
+
+    const cycleStartStr = formatYmd(cycleStart);
+    const cycleEndStr = formatYmd(cycleEnd);
+    const allDates = enumerateDateStrings(cycleStartStr, cycleEndStr);
+
+    const holidaySet = new Set();
+    holidaysRaw
+      .split(/[,\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach((d) => holidaySet.add(d));
+
+    allDates.forEach((d) => {
+      if (isSundayYmd(d)) holidaySet.add(d);
+    });
+
+    const userQuery = { role: 'user' };
+    if (state && state !== 'all') {
+      userQuery.state = state;
+    }
+
+    const users = await User.find(userQuery)
+      .select('fullName email state joinDate employmentEndDate')
+      .sort({ state: 1, fullName: 1 })
+      .lean();
+
+    const userIds = users.map((u) => u._id);
+
+    const attendanceRows = await Attendance.find({
+      user: { $in: userIds },
+      date: { $gte: cycleStartStr, $lte: cycleEndStr },
+    })
+      .select('user date purpose')
+      .lean();
+
+    const byUserDate = {};
+    attendanceRows.forEach((row) => {
+      const uid = row.user.toString();
+      if (!byUserDate[uid]) byUserDate[uid] = {};
+      if (!byUserDate[uid][row.date]) byUserDate[uid][row.date] = [];
+      byUserDate[uid][row.date].push(String(row.purpose || '').trim());
+    });
+
+    const rows = users.map((u, index) => {
+      const uid = u._id.toString();
+      let joinStr = (u.joinDate && String(u.joinDate).trim()) || oidToJoinDateYmd(u._id) || cycleStartStr;
+      const exitStr = (u.employmentEndDate && String(u.employmentEndDate).trim()) || '';
+
+      const dayCells = {};
+      let workingDays = 0;
+      let absent = 0;
+      let leave = 0;
+      let present = 0;
+
+      allDates.forEach((dateStr) => {
+        const isHoliday = holidaySet.has(dateStr);
+        const beforeJoin = compareDateStr(dateStr, joinStr) < 0;
+
+        if (beforeJoin) {
+          dayCells[dateStr] = 'LIVE';
+          return;
+        }
+        /* employmentEndDate = last calendar day still employed; EXIT from the day after */
+        if (exitStr && compareDateStr(dateStr, exitStr) > 0) {
+          dayCells[dateStr] = 'EXIT';
+          return;
+        }
+        if (isHoliday) {
+          dayCells[dateStr] = '';
+          return;
+        }
+
+        workingDays += 1;
+        const purposes = (byUserDate[uid] && byUserDate[uid][dateStr]) || [];
+        const hasOnLeave = purposes.some((p) => p.toLowerCase() === 'on leave');
+        const hasCheckIn = purposes.some((p) => p === 'Check In');
+
+        if (hasOnLeave) {
+          dayCells[dateStr] = 'L';
+          leave += 1;
+          return;
+        }
+        if (hasCheckIn) {
+          dayCells[dateStr] = '1';
+          present += 1;
+          return;
+        }
+        dayCells[dateStr] = 'A';
+        absent += 1;
+      });
+
+      const paidDays = present + leave;
+      const pctAttendance = workingDays > 0 ? ((paidDays / workingDays) * 100).toFixed(1) : '0.0';
+
+      return {
+        srNo: index + 1,
+        userId: uid,
+        fullName: u.fullName,
+        email: u.email,
+        state: u.state,
+        joinDate: joinStr,
+        employmentEndDate: exitStr || '',
+        dayCells,
+        workingDays,
+        absent,
+        leave,
+        presentDays: present,
+        paidDays,
+        pctAttendance: `${pctAttendance}%`,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      cycle: { start: cycleStartStr, end: cycleEndStr, endYear, endMonth },
+      dates: allDates,
+      holidayDates: Array.from(holidaySet).sort(),
+      rows,
+    });
+  } catch (error) {
+    console.error('Error building monthly attendance matrix:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to build monthly attendance matrix',
+      message: error.message,
+    });
+  }
+};
+
 module.exports = {
   markAttendance,
   getAttendanceByDate,
@@ -1495,5 +1711,6 @@ module.exports = {
   getUserDashboardStats,
   migrateAllDistances,
   getUserMovementTracking,
-  getAdminDashboardStats
+  getAdminDashboardStats,
+  getMonthlyAttendanceMatrix
 };
