@@ -129,7 +129,7 @@ const addOrUpdateTarget = async (req, res) => {
 // Bulk import targets from Excel data
 const bulkImportTargets = async (req, res) => {
   try {
-    const { targetsData } = req.body; // Array of { email, september2025, october2025, november2025 }
+    const { targetsData } = req.body;
 
     if (!Array.isArray(targetsData) || targetsData.length === 0) {
       return res.status(400).json({ error: 'Targets data array is required' });
@@ -140,35 +140,28 @@ const bulkImportTargets = async (req, res) => {
 
     for (const targetData of targetsData) {
       try {
-        const { email, september2025, october2025, november2025 } = targetData;
+        const { email, may2026, june2026, july2026 } = targetData; // ← FIXED
 
         if (!email) {
           errors.push({ email: 'N/A', error: 'Email is required' });
           continue;
         }
 
-        // Find user by email
         const user = await User.findOne({ email });
         if (!user) {
           errors.push({ email, error: 'User not found' });
           continue;
         }
 
-        // Find or create user targets
         let userTargets = await UserTarget.findOne({ user: user._id });
-        
         if (!userTargets) {
-          userTargets = new UserTarget({
-            user: user._id,
-            targets: []
-          });
+          userTargets = new UserTarget({ user: user._id, targets: [] });
         }
 
-        // Add/update targets for each month
-        const months = [
-          { month: 'September', year: 2025, target: september2025 },
-          { month: 'October', year: 2025, target: october2025 },
-          { month: 'November', year: 2025, target: november2025 }
+        const months = [                                             // ← FIXED
+          { month: 'May',  year: 2026, target: may2026 },
+          { month: 'June', year: 2026, target: june2026 },
+          { month: 'July', year: 2026, target: july2026 }
         ];
 
         for (const { month, year, target } of months) {
@@ -176,7 +169,6 @@ const bulkImportTargets = async (req, res) => {
             const existingTargetIndex = userTargets.targets.findIndex(
               t => t.month === month && t.year === year
             );
-
             if (existingTargetIndex !== -1) {
               userTargets.targets[existingTargetIndex].target = target;
             } else {

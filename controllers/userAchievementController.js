@@ -141,7 +141,7 @@ const addOrUpdateAchievement = async (req, res) => {
 // Bulk import achievements from Excel data
 const bulkImportAchievements = async (req, res) => {
   try {
-    const { achievementsData } = req.body; // Array of { email, september2025 }
+    const { achievementsData } = req.body;
 
     if (!Array.isArray(achievementsData) || achievementsData.length === 0) {
       return res.status(400).json({ error: 'Achievements data array is required' });
@@ -152,23 +152,20 @@ const bulkImportAchievements = async (req, res) => {
 
     for (const achievementData of achievementsData) {
       try {
-        const { email, september2025, october2025, november2025 } = achievementData;
+        const { email, may2026, june2026, july2026 } = achievementData; // ← FIXED
 
         if (!email) {
           errors.push({ email: 'N/A', error: 'Email is required' });
           continue;
         }
 
-        // Find user by email
         const user = await User.findOne({ email });
         if (!user) {
           errors.push({ email, error: 'User not found' });
           continue;
         }
 
-        // Find or create user achievements
         let userAchievements = await UserAchievement.findOne({ user: user._id });
-        
         if (!userAchievements) {
           userAchievements = new UserAchievement({
             user: user._id,
@@ -176,54 +173,22 @@ const bulkImportAchievements = async (req, res) => {
           });
         }
 
-        // Add/update achievement for September 2025
-        if (september2025 !== undefined && september2025 !== null && september2025 !== '') {
-          const existingAchievementIndex = userAchievements.achievements.findIndex(
-            a => a.month === 'September' && a.year === 2025
-          );
+        const months = [                                              // ← FIXED
+          { month: 'May',  year: 2026, achievement: may2026 },
+          { month: 'June', year: 2026, achievement: june2026 },
+          { month: 'July', year: 2026, achievement: july2026 }
+        ];
 
-          if (existingAchievementIndex !== -1) {
-            userAchievements.achievements[existingAchievementIndex].achievement = september2025;
-          } else {
-            userAchievements.achievements.push({ 
-              month: 'September', 
-              year: 2025, 
-              achievement: september2025 
-            });
-          }
-        }
-
-        // Add/update achievement for October 2025
-        if (october2025 !== undefined && october2025 !== null && october2025 !== '') {
-          const existingAchievementIndex = userAchievements.achievements.findIndex(
-            a => a.month === 'October' && a.year === 2025
-          );
-
-          if (existingAchievementIndex !== -1) {
-            userAchievements.achievements[existingAchievementIndex].achievement = october2025;
-          } else {
-            userAchievements.achievements.push({ 
-              month: 'October', 
-              year: 2025, 
-              achievement: october2025 
-            });
-          }
-        }
-
-        // Add/update achievement for November 2025
-        if (november2025 !== undefined && november2025 !== null && november2025 !== '') {
-          const existingAchievementIndex = userAchievements.achievements.findIndex(
-            a => a.month === 'November' && a.year === 2025
-          );
-
-          if (existingAchievementIndex !== -1) {
-            userAchievements.achievements[existingAchievementIndex].achievement = november2025;
-          } else {
-            userAchievements.achievements.push({ 
-              month: 'November', 
-              year: 2025, 
-              achievement: november2025 
-            });
+        for (const { month, year, achievement } of months) {
+          if (achievement !== undefined && achievement !== null && achievement !== '') {
+            const existingIndex = userAchievements.achievements.findIndex(
+              a => a.month === month && a.year === year
+            );
+            if (existingIndex !== -1) {
+              userAchievements.achievements[existingIndex].achievement = achievement;
+            } else {
+              userAchievements.achievements.push({ month, year, achievement });
+            }
           }
         }
 
