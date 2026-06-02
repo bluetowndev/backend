@@ -7,6 +7,32 @@ const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fet
 const TotalDistance = require('../models/distanceModel');
 const SiteVisitSummary = require('../models/siteVisitSummaryModel');
 
+// ─────────────────────────────────────────────
+// IST TIMEZONE HELPERS (UTC + 5:30)
+// ─────────────────────────────────────────────
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // 19800000 ms
+const DAY_START_HOUR_IST = 3; // Day starts at 3:00 AM IST
+
+/**
+ * Returns today's date string in IST as "YYYY-MM-DD"
+ * Day boundary is at 3:00 AM IST (mathematically correct)
+ * 
+ * Examples:
+ * - June 2, 2026, 2:59 AM IST → returns "2026-06-01"
+ * - June 2, 2026, 3:00 AM IST → returns "2026-06-02"
+ * - June 2, 2026, 6:00 AM IST → returns "2026-06-02"
+ */
+const getTodayIST = () => {
+  const now = new Date();
+  // Step 1: Convert UTC to IST by adding 5.5 hours
+  const istTime = new Date(now.getTime() + IST_OFFSET_MS);
+  // Step 2: Adjust by subtracting the day start hour (3 AM)
+  // This makes 3 AM IST the boundary between days
+  const adjustedTime = new Date(istTime.getTime() - (DAY_START_HOUR_IST * 60 * 60 * 1000));
+  // Step 3: Return just the date part
+  return adjustedTime.toISOString().split('T')[0];
+};
+
 //Configuration of cloudinary for converting the images into an url
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -58,6 +84,9 @@ const getLocationName = async (lat, lng) => {
   }
 };
 
+// ─────────────────────────────────────────────
+// MARK ATTENDANCE - THE ONLY FUNCTION MODIFIED
+// ─────────────────────────────────────────────
 const markAttendance = async (req, res) => {
   // console.log("Request Body:", req.body);
   const { location, image, purpose, feedback, subPurpose, userId } = req.body;
@@ -96,6 +125,7 @@ const markAttendance = async (req, res) => {
         const parsedLocation = JSON.parse(location);
         const locationName = await getLocationName(parsedLocation.lat, parsedLocation.lng);
 
+        // ✅ FIXED: Using IST date with 3 AM cutoff instead of UTC date
         const attendance = new Attendance({
           image: imageUrl,
           location: parsedLocation,
@@ -103,7 +133,7 @@ const markAttendance = async (req, res) => {
           purpose,
           subPurpose,
           feedback,
-          date: new Date().toISOString().split("T")[0],
+          date: getTodayIST(),  // ← ONLY THIS LINE CHANGED
           timestamp,
           user: targetUserId,
         });
