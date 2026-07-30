@@ -19,14 +19,14 @@ const attendanceSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
-  purpose: { // New field for purpose of visit
+  purpose: {
     type: String,
     required: true,
   },
   subPurpose: { type: String },
-  feedback: { // New field for feedback
+  feedback: {
     type: String,
-    maxlength: 50,
+    maxlength: 200,
   },
   timestamp: {
     type: Date,
@@ -42,6 +42,17 @@ const attendanceSchema = new mongoose.Schema({
     required: true,
   },
 });
+
+attendanceSchema.index({ user: 1, date: 1 });
+attendanceSchema.index(
+  { user: 1, date: 1, purpose: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      purpose: { $in: ['Check In', 'Check Out', 'On Leave'] }
+    }
+  }
+);
 
 const Attendance = mongoose.model('Attendance', attendanceSchema);
 

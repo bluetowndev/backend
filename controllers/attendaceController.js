@@ -7,31 +7,7 @@ const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fet
 const TotalDistance = require('../models/distanceModel');
 const SiteVisitSummary = require('../models/siteVisitSummaryModel');
 
-// ─────────────────────────────────────────────
-// IST TIMEZONE HELPERS (UTC + 5:30)
-// ─────────────────────────────────────────────
-const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // 19800000 ms
-const DAY_START_HOUR_IST = 3; // Day starts at 3:00 AM IST
-
-/**
- * Returns today's date string in IST as "YYYY-MM-DD"
- * Day boundary is at 3:00 AM IST (mathematically correct)
- * 
- * Examples:
- * - June 2, 2026, 2:59 AM IST → returns "2026-06-01"
- * - June 2, 2026, 3:00 AM IST → returns "2026-06-02"
- * - June 2, 2026, 6:00 AM IST → returns "2026-06-02"
- */
-const getTodayIST = () => {
-  const now = new Date();
-  // Step 1: Convert UTC to IST by adding 5.5 hours
-  const istTime = new Date(now.getTime() + IST_OFFSET_MS);
-  // Step 2: Adjust by subtracting the day start hour (3 AM)
-  // This makes 3 AM IST the boundary between days
-  const adjustedTime = new Date(istTime.getTime() - (DAY_START_HOUR_IST * 60 * 60 * 1000));
-  // Step 3: Return just the date part
-  return adjustedTime.toISOString().split('T')[0];
-};
+const { getTodayIST } = require('../utils/istDate');
 
 //Configuration of cloudinary for converting the images into an url
 cloudinary.config({
@@ -85,10 +61,9 @@ const getLocationName = async (lat, lng) => {
 };
 
 // ─────────────────────────────────────────────
-// MARK ATTENDANCE - THE ONLY FUNCTION MODIFIED
+// MARK ATTENDANCE - DUPLICATE FIXED
 // ─────────────────────────────────────────────
 const markAttendance = async (req, res) => {
-  // console.log("Request Body:", req.body);
   const { location, image, purpose, feedback, subPurpose, userId } = req.body;
   if (!image) return res.status(400).json({ error: "Image is required" });
   if (!location) return res.status(400).json({ error: "Location is required" });
@@ -101,6 +76,42 @@ const markAttendance = async (req, res) => {
   const buffer = Buffer.from(matches[2], "base64");
 
   try {
+    let targetUserId = req.user._id;
+    if (req.user.role === "superadmin" && userId) {
+      const targetUser = await User.findById(userId).select("_id role");
+      if (!targetUser) {
+        return res.status(404).json({ error: "Target user not found" });
+      }
+      if (targetUser.role !== "user") {
+        return res.status(400).json({ error: "Superadmin can only mark attendance for users" });
+      }
+      targetUserId = targetUser._id;
+    }
+
+    const todayDate = getTodayIST();
+    const SINGLE_INSTANCE_PURPOSES = ['Check In', 'Check Out', 'On Leave'];
+    if (SINGLE_INSTANCE_PURPOSES.includes(purpose)) {
+      const existing = await Attendance.findOne({
+        user: targetUserId,
+        date: todayDate,
+        purpose,
+      });
+      if (existing) {
+        return res.status(409).json({ error: `You have already marked "${purpose}" today` });
+      }
+    }
+
+    if (purpose === 'Check Out') {
+      const checkInExists = await Attendance.findOne({
+        user: targetUserId,
+        date: todayDate,
+        purpose: 'Check In',
+      });
+      if (!checkInExists) {
+        return res.status(400).json({ error: 'You must Check In before checking out' });
+      }
+    }
+
     const maxSizeInKB = 10;
     const resizedBuffer = await compressImageToTargetSize(buffer, maxSizeInKB);
 
@@ -108,24 +119,21 @@ const markAttendance = async (req, res) => {
       if (error) return res.status(500).json({ error: "Cloudinary upload failed" });
 
       try {
-        let targetUserId = req.user._id;
-        if (req.user.role === "superadmin" && userId) {
-          const targetUser = await User.findById(userId).select("_id role");
-          if (!targetUser) {
-            return res.status(404).json({ error: "Target user not found" });
-          }
-          if (targetUser.role !== "user") {
-            return res.status(400).json({ error: "Superadmin can only mark attendance for users" });
-          }
-          targetUserId = targetUser._id;
-        }
-
         const imageUrl = result.secure_url;
         const timestamp = new Date();
-        const parsedLocation = JSON.parse(location);
+
+        let parsedLocation;
+        try {
+          parsedLocation = JSON.parse(location);
+        } catch {
+          return res.status(400).json({ error: "Invalid location format. Expected valid JSON." });
+        }
+        if (!parsedLocation || typeof parsedLocation.lat !== 'number' || typeof parsedLocation.lng !== 'number') {
+          return res.status(400).json({ error: "Location must contain valid lat and lng numbers" });
+        }
+
         const locationName = await getLocationName(parsedLocation.lat, parsedLocation.lng);
 
-        // ✅ FIXED: Using IST date with 3 AM cutoff instead of UTC date
         const attendance = new Attendance({
           image: imageUrl,
           location: parsedLocation,
@@ -133,7 +141,7 @@ const markAttendance = async (req, res) => {
           purpose,
           subPurpose,
           feedback,
-          date: getTodayIST(),  // ← ONLY THIS LINE CHANGED
+          date: todayDate,
           timestamp,
           user: targetUserId,
         });
@@ -141,6 +149,9 @@ const markAttendance = async (req, res) => {
         await attendance.save();
         res.status(201).json({ message: "Attendance saved successfully" });
       } catch (error) {
+        if (error.code === 11000) {
+          return res.status(409).json({ error: `You have already marked "${purpose}" today` });
+        }
         res.status(500).json({ error: "Server error" });
       }
     }).end(resizedBuffer);
@@ -154,19 +165,10 @@ const getAttendanceByDate = async (req, res) => {
   const { date } = req.query;
   const userId = req.user._id;
 
-  const startDate = new Date(date);
-  startDate.setUTCHours(0, 0, 0, 0); // Start of the day in UTC
-
-  const endDate = new Date(startDate);
-  endDate.setUTCDate(endDate.getUTCDate() + 1); // End of the day in UTC
-
   try {
     const attendances = await Attendance.find({
       user: userId,
-      timestamp: {
-        $gte: startDate,
-        $lt: endDate,
-      },
+      date,
     });
 
     res.status(200).json(attendances);
@@ -201,16 +203,12 @@ const getFilteredAttendance = async (req, res) => {
       usersInState = await User.find({ state }).distinct('_id'); // Get users from the specific state
     }
 
-    // Parse the start and end dates
-    const start = new Date(startDate);
-    start.setUTCHours(0, 0, 0, 0);
-
-    const end = endDate ? new Date(endDate) : new Date(start);
-    end.setUTCHours(23, 59, 59, 999);
-
     const attendances = await Attendance.find({
       user: { $in: usersInState },
-      timestamp: { $gte: start, $lt: end },
+      date: {
+        $gte: startDate,
+        ...(endDate ? { $lte: endDate } : { $lte: startDate })
+      },
     }).populate('user', 'email state fullName phoneNumber reportingManager');
 
     res.status(200).json(attendances);
@@ -288,19 +286,10 @@ const getAttendanceWithDistances = async (req, res) => {
   const { date } = req.query;
   const userId = req.user._id;
 
-  const startDate = new Date(date);
-  startDate.setUTCHours(0, 0, 0, 0); // Start of the day in UTC
-
-  const endDate = new Date(startDate);
-  endDate.setUTCHours(23, 59, 59, 999); // End of the day in UTC
-
   try {
     const attendances = await Attendance.find({
       user: userId,
-      timestamp: {
-        $gte: startDate,
-        $lt: endDate,
-      },
+      date,
     });
 
     if (attendances.length > 1) {
@@ -327,62 +316,42 @@ const getAttendanceSummary = async (req, res) => {
   const { startDate, endDate, holidays } = req.query;
   const userId = req.user._id;
 
+  if (!startDate || !endDate) {
+    return res.status(400).json({ error: 'startDate and endDate are required' });
+  }
+
   try {
-    // Parse the start and end dates
-    const start = new Date(startDate);
-    start.setUTCHours(0, 0, 0, 0);  // Ensure full day coverage
-    const end = new Date(endDate);
-    end.setUTCHours(23, 59, 59, 999);  // End of the day
+    const holidayStrings = (holidays || '').split(',').filter(Boolean);
+    const holidaySet = new Set(holidayStrings);
+    const holidayDates = holidayStrings.map(s => new Date(s));
 
-    // Convert holiday dates into an array and filter future holidays
-    const holidayArray = holidays.split(',').map(date => new Date(date));
-    const holidaySet = new Set(holidayArray); // For faster lookups
+    const now = new Date();
+    const endDateObj = new Date(endDate);
+    endDateObj.setUTCHours(23, 59, 59, 999);
 
-    const currentDate = new Date();
+    const futureHolidays = holidayDates.filter(d => d > now && d <= endDateObj);
 
-    // Filter holidays that haven't occurred yet (future holidays)
-    const futureHolidays = holidayArray.filter(holiday => holiday > currentDate && holiday <= end);
-
-    // Fetch attendance records for the given user and date range
     const attendances = await Attendance.find({
       user: userId,
-      timestamp: {
-        $gte: start,
-        $lte: end,
-      },
+      date: { $gte: startDate, $lte: endDate },
     });
 
-    // Extract attendance dates
     const presentDays = new Set(attendances.map(a => a.date));
-
-    // Calculate total number of days between start and end date
-    const totalDays = Math.floor((end - start) / (1000 * 60 * 60 * 24)) + 1;
-
-    // Subtract total holidays from total days to get working days
+    const totalDays = Math.floor((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1;
     const workDays = totalDays - holidaySet.size;
 
-    // Get the current year and month
-    const year = currentDate.getFullYear();
-    const month = currentDate.getMonth();
+    const remainingDays = Math.max(0, Math.ceil((endDateObj.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+    const futureHolidayCount = futureHolidays.length;
+    const futureWorkDays = remainingDays - futureHolidayCount;
 
-    // Get the last day of the current month
-    const lastDayOfMonth = new Date(year, month + 1, 0); // Day 0 gives the last day of the previous month
-
-    // Calculate the difference in time (milliseconds)
-    const diffTime = lastDayOfMonth.getTime() - currentDate.getTime();
-
-    // Convert milliseconds to days (1 day = 24 * 60 * 60 * 1000 ms)
-    const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-    // Calculate absent days (workDays - present days) + future holidays count, ensuring no negative values
-    let absentDays = workDays - presentDays.size - daysLeft + futureHolidays.length;
-    absentDays = Math.max(0, absentDays); // Ensure absent days are not negative
+    let absentDays = workDays - presentDays.size - futureWorkDays + futureHolidayCount;
+    absentDays = Math.max(0, absentDays);
 
     res.status(200).json({
       holidays: holidaySet.size,
       present: presentDays.size,
       absent: absentDays,
-      futureHolidays: futureHolidays.length,  // To track future holidays
+      futureHolidays: futureHolidayCount,
       workDays,
     });
   } catch (error) {
@@ -467,30 +436,18 @@ const saveTotalDistance = async (req, res) => {
 
 const getUsersWithoutCheckIn = async (req, res) => {
   try {
-    // Get the current date in 'YYYY-MM-DD' format
-    const currentDate = new Date().toISOString().split('T')[0];
+    const currentDate = getTodayIST();
 
-    // Step 1: Use aggregation to find users who have made "Check In" entries for the current date
     const usersWithCheckIn = await Attendance.aggregate([
-      {
-        $match: { purpose: 'Check In', date: currentDate }, // Find all "Check In" entries for today
-      },
-      {
-        $group: { _id: '$user' }, // Group by user ID to get unique users who checked in
-      },
+      { $match: { purpose: 'Check In', date: currentDate } },
+      { $group: { _id: '$user' } },
     ]);
 
-    // Step 2: Use aggregation to find users who have made "On Leave" entries for the current date
     const usersOnLeave = await Attendance.aggregate([
-      {
-        $match: { purpose: 'On Leave', date: currentDate }, // Find all "On Leave" entries for today
-      },
-      {
-        $group: { _id: '$user' }, // Group by user ID to get unique users who are on leave
-      },
+      { $match: { purpose: 'On Leave', date: currentDate } },
+      { $group: { _id: '$user' } },
     ]);
 
-    // Step 3: Extract IDs of users who have checked in or are on leave
     const userIdsWithCheckInOrOnLeave = [
       ...new Set([
         ...usersWithCheckIn.map((entry) => entry._id),
@@ -498,7 +455,6 @@ const getUsersWithoutCheckIn = async (req, res) => {
       ]),
     ];
 
-    // Step 4: Define exclusion criteria
     const excludedEmails = [
       'rit.parmar@bluetown.com',
       'anuj.sonkar@bluetown.com',
@@ -513,40 +469,14 @@ const getUsersWithoutCheckIn = async (req, res) => {
       'test@test.com',
     ];
 
-    // Step 5: Find attendance entries for users NOT in the above list and NOT from Delhi state
-    const attendanceEntries = await Attendance.find({
-      user: { $nin: userIdsWithCheckInOrOnLeave }, // Exclude users who checked in or are on leave
-      date: currentDate,
-    })
-      .populate('user')
-      .lean(); // Convert mongoose documents to plain JavaScript objects
+    const usersNotCheckedIn = await User.find({
+      _id: { $nin: userIdsWithCheckInOrOnLeave },
+      role: 'user',
+      state: { $ne: 'Delhi' },
+      email: { $nin: excludedEmails },
+    }).select('fullName email state phoneNumber reportingManager').lean();
 
-    // Step 6: Filter out users based on exclusion criteria
-    const usersNotCheckedIn = attendanceEntries
-      .filter(
-        (entry) =>
-          entry.user && // Ensure user is not null
-          !excludedEmails.includes(entry.user.email) && // Exclude specific emails
-          entry.user.state !== 'Delhi' // Exclude users from Delhi
-      )
-      .map((entry) => {
-        const { fullName, state, email, phoneNumber, reportingManager } = entry.user;
-        return { fullName, state, email, phoneNumber, reportingManager };
-      });
-
-    // Step 7: Remove duplicates (users may have multiple attendance entries)
-    const uniqueUsers = [];
-    const seenUserEmails = new Set();
-
-    for (const user of usersNotCheckedIn) {
-      if (!seenUserEmails.has(user.email)) {
-        uniqueUsers.push(user);
-        seenUserEmails.add(user.email);
-      }
-    }
-
-    // Respond with the list of unique users
-    res.status(200).json({ success: true, data: uniqueUsers });
+    res.status(200).json({ success: true, data: usersNotCheckedIn });
   } catch (error) {
     console.error('Error fetching users not checked in today:', error);
     res.status(500).json({ success: false, message: 'Internal Server Error' });
@@ -556,13 +486,11 @@ const getUsersWithoutCheckIn = async (req, res) => {
 
 const getUsersWithoutCheckOut = async (req, res) => {
   try {
-    // Get start and end dates from query parameters, default to current date if not provided
     const { startDate, endDate } = req.query;
-    const currentDate = new Date().toISOString().split('T')[0];
+    const currentDate = getTodayIST();
     const start = startDate || currentDate;
     const end = endDate || currentDate;
 
-    // Validate date format
     if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
       return res.status(400).json({ success: false, message: 'Invalid start date format. Use YYYY-MM-DD' });
     }
@@ -570,12 +498,10 @@ const getUsersWithoutCheckOut = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid end date format. Use YYYY-MM-DD' });
     }
 
-    // Ensure end date is not before start date
     if (startDate && endDate && new Date(endDate) < new Date(startDate)) {
       return res.status(400).json({ success: false, message: 'End date cannot be before start date' });
     }
 
-    // Generate array of dates in the range
     const dateRange = [];
     let current = new Date(start);
     const endDateObj = new Date(end);
@@ -680,9 +606,8 @@ const getUsersWithoutCheckOut = async (req, res) => {
 const getUsersOnLeave = async (req, res) => {
   try {
     // Get the current date in 'YYYY-MM-DD' format
-    const currentDate = new Date().toISOString().split('T')[0];
+    const currentDate = getTodayIST();
 
-    // Step 1: Find attendance entries with "On Leave" purpose for the current date
     const attendanceEntries = await Attendance.find({
       purpose: 'On Leave',
       date: currentDate,
@@ -717,13 +642,8 @@ const getUsersOnLeave = async (req, res) => {
 
 const getUserVisitCounts = async (req, res) => {
   try {
-    // Extract start and end dates from request query
     const { startDate, endDate } = req.query;
-    
-    // Get the current date in 'YYYY-MM-DD' format if no date range is provided
-    const currentDate = new Date().toISOString().split('T')[0];
-    
-    // Define date filter based on input
+    const currentDate = getTodayIST();
     let dateFilter = {};
     if (startDate && endDate) {
       dateFilter = { date: { $gte: startDate, $lte: endDate } };
@@ -787,9 +707,8 @@ const getUserVisitCounts = async (req, res) => {
 
 const getUsersWithoutAttendance = async (req, res) => {
   try {
-    // Get start and end dates from query parameters, default to current date if not provided
     const { startDate, endDate } = req.query;
-    const currentDate = new Date().toISOString().split('T')[0];
+    const currentDate = getTodayIST();
     const start = startDate || currentDate;
     const end = endDate || currentDate;
 
@@ -854,10 +773,9 @@ const getUsersWithoutAttendance = async (req, res) => {
 
 const isFirstEntryToday = async (req, res) => {
   try {
-    const userId = req.user._id; // Assuming you are using authentication middleware
-    const todayDate = new Date().toISOString().split('T')[0]; // Get today's date in YYYY-MM-DD format
+    const userId = req.user._id;
+    const todayDate = getTodayIST();
 
-    // Check if there's an attendance record for the user on today's date
     const attendance = await Attendance.findOne({ user: userId, date: todayDate });
 
     if (attendance) {
@@ -876,7 +794,7 @@ const getLastSiteVisit = async (req, res) => {
     const lastSiteVisit = await Attendance.findOne({
       user: req.user._id,
       purpose: 'Site Visit',
-      date: new Date().toISOString().split('T')[0]
+      date: getTodayIST()
     }).sort({ timestamp: -1 });
 
     if (!lastSiteVisit) {
@@ -930,12 +848,15 @@ const getUserDashboardStats = async (req, res) => {
     const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
     const endOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0);
 
+    const startOfMonthStr = startOfMonth.toISOString().split('T')[0];
+    const endOfMonthStr = endOfMonth.toISOString().split('T')[0];
+
     // Get all attendance records for the current month
     const monthlyAttendance = await Attendance.find({
       user: userId,
-      timestamp: {
-        $gte: startOfMonth,
-        $lte: endOfMonth
+      date: {
+        $gte: startOfMonthStr,
+        $lte: endOfMonthStr
       }
     }).sort({ timestamp: 1 });
 
@@ -967,7 +888,7 @@ const getUserDashboardStats = async (req, res) => {
     ).length;
 
     // Get today's total distance and date
-    const todayDate = new Date().toISOString().split('T')[0];
+    const todayDate = getTodayIST();
     const todayDistance = await TotalDistance.findOne({
       userId,
       date: todayDate
@@ -989,11 +910,14 @@ const getUserDashboardStats = async (req, res) => {
     const previousMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
     const previousMonthEnd = new Date(currentDate.getFullYear(), currentDate.getMonth(), 0);
     
+    const prevMonthStr = previousMonth.toISOString().split('T')[0];
+    const prevMonthEndStr = previousMonthEnd.toISOString().split('T')[0];
+
     const previousMonthAttendance = await Attendance.find({
       user: userId,
-      timestamp: {
-        $gte: previousMonth,
-        $lte: previousMonthEnd
+      date: {
+        $gte: prevMonthStr,
+        $lte: prevMonthEndStr
       }
     });
 
@@ -1191,15 +1115,12 @@ const getUserMovementTracking = async (req, res) => {
     }
 
     // Date range filter
-    const start = new Date(startDate || new Date().toISOString().split('T')[0]);
-    start.setUTCHours(0, 0, 0, 0);
-    
-    const end = endDate ? new Date(endDate) : new Date(start);
-    end.setUTCHours(23, 59, 59, 999);
+    const startStr = startDate || new Date().toISOString().split('T')[0];
+    const endStr = endDate || startStr;
 
     // Get attendance records
     let attendanceQuery = {
-      timestamp: { $gte: start, $lte: end }
+      date: { $gte: startStr, $lte: endStr }
     };
 
     if (Object.keys(userFilter).length > 0) {
@@ -1326,11 +1247,8 @@ const getAdminDashboardStats = async (req, res) => {
     const { startDate, endDate, state } = req.query;
 
     // Date range
-    const start = new Date(startDate || new Date(new Date().setDate(new Date().getDate() - 30)));
-    start.setUTCHours(0, 0, 0, 0);
-    
-    const end = endDate ? new Date(endDate) : new Date();
-    end.setUTCHours(23, 59, 59, 999);
+    const startDateStr = startDate || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const endDateStr = endDate || new Date().toISOString().split('T')[0];
 
     // Get all users or filtered by state
     let userQuery = {};
@@ -1342,7 +1260,7 @@ const getAdminDashboardStats = async (req, res) => {
 
     // Get attendance data for date range
     const attendanceQuery = {
-      timestamp: { $gte: start, $lte: end }
+      date: { $gte: startDateStr, $lte: endDateStr }
     };
     
     if (state && state !== 'all') {
@@ -1395,8 +1313,8 @@ const getAdminDashboardStats = async (req, res) => {
     // Get distance statistics
     const distanceRecords = await TotalDistance.find({
       date: {
-        $gte: start.toISOString().split('T')[0],
-        $lte: end.toISOString().split('T')[0]
+        $gte: startDateStr,
+        $lte: endDateStr
       }
     });
 
@@ -1501,8 +1419,8 @@ const getAdminDashboardStats = async (req, res) => {
         recentActivity
       },
       dateRange: {
-        start: start.toISOString().split('T')[0],
-        end: end.toISOString().split('T')[0]
+        start: startDateStr,
+        end: endDateStr
       }
     });
 

@@ -1,5 +1,6 @@
 const express = require('express');
 const requireAuth = require('../middleware/requireAuth');
+const { attendanceLimiter } = require('../middleware/rateLimiter');
 const { markAttendance, getAttendanceByDate, getAllAttendance, getFilteredAttendance, getEmailAttendance, getAttendanceWithDistances, getAttendanceSummary, saveTotalDistance, getUsersWithoutCheckIn, getUsersWithoutCheckOut, getUsersOnLeave, getUserVisitCounts, getUsersWithoutAttendance, isFirstEntryToday, getLastSiteVisit, saveSiteVisitSummary, getUserDashboardStats, migrateAllDistances, getUserMovementTracking, getAdminDashboardStats, getMonthlyAttendanceMatrix, testDistanceCalculation } = require('../controllers/attendaceController');
 const multer = require('multer');
 
@@ -8,7 +9,7 @@ const upload = multer({ dest: 'uploads/' });
 
 router.use(requireAuth);
 
-router.post('/', upload.single('image'), markAttendance);
+router.post('/', attendanceLimiter, upload.single('image'), markAttendance);
 router.get('/', getAttendanceByDate);
 router.get('/all', getAllAttendance);
 router.get('/filtered', getFilteredAttendance);

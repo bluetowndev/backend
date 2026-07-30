@@ -1,6 +1,7 @@
 const User = require('../models/userModel');
 const Attendance = require('../models/attendanceModel');
 const jwt = require("jsonwebtoken");
+const { getTodayIST } = require('../utils/istDate');
 
 const createToken = (_id) => {
   return jwt.sign({ _id }, process.env.SECRET, { expiresIn: "30d" });
@@ -20,8 +21,10 @@ const loginUser = async (req, res) => {
     res.status(200).json({ 
       email: user.email, 
       token, 
-      state: user.state, // Add the state from the user object
-      role: user.role 
+      state: user.state,
+      role: user.role,
+      fullName: user.fullName,
+      _id: user._id,
     });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -74,9 +77,9 @@ const getEngineersByState = async (req, res) => {
     currentMonthEnd.setMonth(currentMonthEnd.getMonth() + 1);
     currentMonthEnd.setDate(0); // Last day of the month
 
-    const dates = []; // Array to hold all dates of the current month
-    for (let d = currentMonthStart; d <= currentMonthEnd; d.setDate(d.getDate() + 1)) {
-      dates.push(new Date(d).toISOString().split('T')[0]); // Format YYYY-MM-DD
+    const dates = [];
+    for (let d = new Date(currentMonthStart); d <= currentMonthEnd; d.setDate(d.getDate() + 1)) {
+      dates.push(d.toISOString().split('T')[0]);
     }
 
     const matchStage = { role: 'user' };
@@ -143,7 +146,7 @@ const getEngineersByState = async (req, res) => {
 
 const getUsersWithoutAttendanceForToday = async (req, res) => {
   try {
-    const today = new Date().toISOString().split('T')[0]; // Format YYYY-MM-DD
+    const today = getTodayIST();
 
     // Find users who have marked attendance today
     const usersWithAttendance = await Attendance.find({ date: today }).distinct('user');
